@@ -1,0 +1,7 @@
+[project]
+name = "tools"
+version = "0.1.0"
+description = "This is the package that contains all the tools and tooling for the agent monkeycode ;)"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []
