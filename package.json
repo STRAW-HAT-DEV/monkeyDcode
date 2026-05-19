@@ -1,20 +1,18 @@
 {
-    "name": "monkeycode",
-    "module": "src/index.tsx",
-    "type": "module",
+    "name": "monkeydcode",
     "private": true,
+    "workspaces": [
+        "packages/*"
+    ],
     "scripts": {
-        "dev": "bun run --watch src/index.tsx"
+        "dev": "bun run --filter @monkeydcode/tui dev",
+        "build": "bun run --filter '*' build",
+        "typecheck": "bun run --filter '*' typecheck",
+        "test": "bun run --filter '*' test",
+        "lint": "biome check ."
     },
     "devDependencies": {
-        "@types/bun": "latest"
-    },
-    "peerDependencies": {
-        "typescript": "^5"
-    },
-    "dependencies": {
-        "@opentui/core": "^0.2.10",
-        "@opentui/react": "^0.2.10",
-        "react": "^19.2.6"
+        "@types/bun": "latest",
+        "typescript": "^5.8.0"
     }
 }
