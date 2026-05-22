@@ -1,0 +1,17 @@
+{
+    "name": "@monkeydcode/agent",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "bun test"
+    },
+    "dependencies": {
+        "@monkeydcode/consistency": "workspace:*",
+        "@monkeydcode/context": "workspace:*",
+        "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/llm": "workspace:*"
+    }
+}
