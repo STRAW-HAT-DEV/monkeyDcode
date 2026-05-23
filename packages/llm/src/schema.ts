@@ -73,8 +73,9 @@ export interface LLMResponse {
     stopReason: StopReason
 }
 
-// Discriminated union — exhaustive, no string matching needed downstream
+// Discriminated union — all event types across providers and reasoning models
 export type LLMEvent =
+    // Core streaming
     | { type: "text_delta"; delta: string }
     | { type: "tool_call_start"; id: string; name: string }
     | { type: "tool_call_delta"; id: string; inputDelta: string }
@@ -82,6 +83,21 @@ export type LLMEvent =
     | { type: "usage"; stats: UsageStats }
     | { type: "done"; response: LLMResponse }
     | { type: "error"; error: LLMError }
+    // Extended thinking / reasoning (Claude, o1, o3, DeepSeek-R1)
+    | { type: "reasoning-start" }
+    | { type: "reasoning-delta"; delta: string }
+    | { type: "reasoning-end"; text: string }
+    // Tool lifecycle (full cycle)
+    | { type: "tool-input-start"; id: string; name: string }
+    | { type: "tool-input-delta"; id: string; inputDelta: string }
+    | { type: "tool-input-end"; id: string; input: Record<string, unknown> }
+    | { type: "tool-call"; id: string; name: string; input: Record<string, unknown> }
+    | { type: "tool-result"; id: string; result: unknown }
+    | { type: "tool-error"; id: string; error: unknown }
+    // Multi-step / agent loop
+    | { type: "step-start"; stepIndex: number }
+    | { type: "step-finish"; stepIndex: number; usage: UsageStats; stopReason: StopReason }
+    | { type: "provider-error"; message: string; code?: string }
 
 // Avoid circular import — define inline here, full class in error.ts
 import type { LLMError } from "./error.ts"

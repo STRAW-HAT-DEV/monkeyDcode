@@ -1,0 +1,27 @@
+{
+    "name": "@monkeydcode/plugin",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./tool": "./src/tool.ts",
+        "./tui": "./src/tui.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "bun test"
+    },
+    "dependencies": {
+        "effect": "4.0.0-beta.66",
+        "zod": "4.1.8",
+        "@monkeydcode/core": "workspace:*",
+        "@monkeydcode/sdk": "workspace:*",
+        "@opentui/core": "^0.2.10",
+        "@opentui/react": "^0.2.10"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
+    }
+}
