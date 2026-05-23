@@ -24,3 +24,20 @@ export const Route = {
         model: (id, label) => ({ provider, id, label }),
     }),
 }
+
+// Compatibility types for opencode engine session layer
+export interface LLMClient {
+    send(request: import("./schema.ts").LLMRequest): Promise<import("./schema.ts").LLMResponse>
+}
+
+export interface RequestExecutor {
+    execute(request: unknown): Promise<unknown>
+}
+
+export interface WebSocketExecutor {
+    connect(url: string): Promise<unknown>
+}
+
+export interface LLMClientService {
+    client: LLMClient
+}

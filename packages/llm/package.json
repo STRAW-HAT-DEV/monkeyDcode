@@ -4,6 +4,16 @@
     "private": true,
     "type": "module",
     "main": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./providers": "./src/index.ts",
+        "./providers/*": "./src/providers/*.ts",
+        "./route": "./src/route.ts",
+        "./schema": "./src/schema.ts",
+        "./error": "./src/error.ts",
+        "./protocol": "./src/protocol.ts",
+        "./protocols/*": "./src/protocols/*.ts"
+    },
     "scripts": {
         "typecheck": "tsc --noEmit",
         "test": "bun test"
