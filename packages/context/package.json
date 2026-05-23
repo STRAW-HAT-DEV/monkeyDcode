@@ -1,0 +1,16 @@
+{
+    "name": "@monkeydcode/context",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "bun test"
+    },
+    "dependencies": {
+        "@monkeydcode/core": "workspace:*",
+        "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/python-bridge": "workspace:*"
+    }
+}

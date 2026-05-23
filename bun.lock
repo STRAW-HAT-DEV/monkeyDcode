@@ -4,6 +4,73 @@
   "workspaces": {
     "": {
       "name": "my-opentui-project",
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.8.0",
+      },
+    },
+    "packages/agent": {
+      "name": "@monkeydcode/agent",
+      "version": "0.1.0",
+      "dependencies": {
+        "@monkeydcode/consistency": "workspace:*",
+        "@monkeydcode/context": "workspace:*",
+        "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/llm": "workspace:*",
+      },
+    },
+    "packages/consistency": {
+      "name": "@monkeydcode/consistency",
+      "version": "0.1.0",
+      "dependencies": {
+        "@monkeydcode/core": "workspace:*",
+        "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/llm": "workspace:*",
+        "@monkeydcode/python-bridge": "workspace:*",
+      },
+    },
+    "packages/context": {
+      "name": "@monkeydcode/context",
+      "version": "0.1.0",
+      "dependencies": {
+        "@monkeydcode/core": "workspace:*",
+        "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/python-bridge": "workspace:*",
+      },
+    },
+    "packages/core": {
+      "name": "@monkeydcode/core",
+      "version": "0.1.0",
+    },
+    "packages/engine": {
+      "name": "@monkeydcode/engine",
+      "version": "0.1.0",
+      "dependencies": {
+        "@monkeydcode/core": "workspace:*",
+        "@monkeydcode/llm": "workspace:*",
+      },
+    },
+    "packages/llm": {
+      "name": "@monkeydcode/llm",
+      "version": "0.1.0",
+      "dependencies": {
+        "@monkeydcode/core": "workspace:*",
+        "effect": "^3.16.8",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/python-bridge": {
+      "name": "@monkeydcode/python-bridge",
+      "version": "0.1.0",
+      "dependencies": {
+        "@monkeydcode/core": "workspace:*",
+      },
+    },
+    "packages/tui": {
+      "name": "@monkeydcode/tui",
+      "version": "0.1.0",
       "dependencies": {
         "@opentui/core": "^0.2.10",
         "@opentui/react": "^0.2.10",
@@ -12,12 +79,25 @@
       "devDependencies": {
         "@types/bun": "latest",
       },
-      "peerDependencies": {
-        "typescript": "^5",
-      },
     },
   },
   "packages": {
+    "@monkeydcode/agent": ["@monkeydcode/agent@workspace:packages/agent"],
+
+    "@monkeydcode/consistency": ["@monkeydcode/consistency@workspace:packages/consistency"],
+
+    "@monkeydcode/context": ["@monkeydcode/context@workspace:packages/context"],
+
+    "@monkeydcode/core": ["@monkeydcode/core@workspace:packages/core"],
+
+    "@monkeydcode/engine": ["@monkeydcode/engine@workspace:packages/engine"],
+
+    "@monkeydcode/llm": ["@monkeydcode/llm@workspace:packages/llm"],
+
+    "@monkeydcode/python-bridge": ["@monkeydcode/python-bridge@workspace:packages/python-bridge"],
+
+    "@monkeydcode/tui": ["@monkeydcode/tui@workspace:packages/tui"],
+
     "@opentui/core": ["@opentui/core@0.2.10", "", { "dependencies": { "bun-ffi-structs": "0.2.2", "diff": "9.0.0", "marked": "17.0.1", "string-width": "7.2.0", "strip-ansi": "7.1.2", "yoga-layout": "3.2.1" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.2.10", "@opentui/core-darwin-x64": "0.2.10", "@opentui/core-linux-arm64": "0.2.10", "@opentui/core-linux-x64": "0.2.10", "@opentui/core-win32-arm64": "0.2.10", "@opentui/core-win32-x64": "0.2.10" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-oviCtx0jYjc7F8X2b8+0IkQLg6WH47Nwl6CFeZo5dU0k6OpSbTbi07ZleObaiECAp+S1YLhAtVdgzHU7hBZlaw=="],
 
     "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.2.10", "", { "os": "darwin", "cpu": "arm64" }, "sha512-+lbDDj42Og+UtTZEwlHhGXichmOlkxSqn0J+Jqjat5/Tt5oZykj1NZjFIQ7ZSz4Miz7EmZwgYKE2CyOmmm9MoQ=="],
@@ -34,6 +114,8 @@
 
     "@opentui/react": ["@opentui/react@0.2.10", "", { "dependencies": { "@opentui/core": "0.2.10", "react-reconciler": "^0.33.0" }, "peerDependencies": { "react": ">=19.2.0", "react-devtools-core": "^7.0.1", "ws": "^8.18.0" } }, "sha512-Tt9hr4abOO95khmYQYOqtMpM3DV3ZfXSq6tPLCqR98Cm1HCYEhXtgWLw0wSUNFcwYglhm06qxHJfgWNkQglPsQ=="],
 
+    "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
     "@types/node": ["@types/node@25.7.0", "", { "dependencies": { "undici-types": "~7.21.0" } }, "sha512-z+pdZyxE+RTQE9AcboAZCb4otwcrvgHD+GlBpPgn0emDVt0ohrTMhAwlr2Wd9nZ+nihhYFxO2pThz3C5qSu2Eg=="],
@@ -46,11 +128,17 @@
 
     "diff": ["diff@9.0.0", "", {}, "sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw=="],
 
+    "effect": ["effect@3.21.2", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-rXd2FGDM8KdjSIrc+mqEELo7ScW7xTVxEf1iInmPSpIde9/nyGuFM710cjTo7/EreGXiUX2MOonPpprbz2XHCg=="],
+
     "emoji-regex": ["emoji-regex@10.6.0", "", {}, "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="],
+
+    "fast-check": ["fast-check@3.23.2", "", { "dependencies": { "pure-rand": "^6.1.0" } }, "sha512-h5+1OzzfCC3Ef7VbtKdcv7zsstUQwUDlYpUTvjeUsJAssPgLn7QzbboPtL5ro04Mq0rPOsMzl7q5hIbRs2wD1A=="],
 
     "get-east-asian-width": ["get-east-asian-width@1.6.0", "", {}, "sha512-QRbvDIbx6YklUe6RxeTeleMR0yv3cYH6PsPZHcnVn7xv7zO1BHN8r0XETu8n6Ye3Q+ahtSarc3WgtNWmehIBfA=="],
 
     "marked": ["marked@17.0.1", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-boeBdiS0ghpWcSwoNm/jJBwdpFaMnZWRzjA6SkUMYb40SVaN1x7mmfGKp0jvexGcx+7y2La5zRZsYFZI6Qpypg=="],
+
+    "pure-rand": ["pure-rand@6.1.0", "", {}, "sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA=="],
 
     "react": ["react@19.2.6", "", {}, "sha512-sfWGGfavi0xr8Pg0sVsyHMAOziVYKgPLNrS7ig+ivMNb3wbCBw3KxtflsGBAwD3gYQlE/AEZsTLgToRrSCjb0Q=="],
 

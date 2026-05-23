@@ -1,0 +1,26 @@
+// A Route binds a Protocol to a base URL + auth.
+// Open/Closed Principle: adding a new provider = new Route.make() call, nothing else changes.
+
+import type { Protocol } from "./protocol.ts"
+import type { ModelRef } from "./schema.ts"
+
+export interface RouteConfig {
+    readonly protocol: Protocol
+    readonly baseUrl: string
+    readonly apiKey: () => string | undefined
+    readonly defaultHeaders?: Record<string, string>
+}
+
+export interface Route {
+    readonly provider: string
+    readonly config: RouteConfig
+    model(id: string, label?: string): ModelRef
+}
+
+export const Route = {
+    make: (provider: string, config: RouteConfig): Route => ({
+        provider,
+        config,
+        model: (id, label) => ({ provider, id, label }),
+    }),
+}
