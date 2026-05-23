@@ -99,5 +99,9 @@
             "node": "./src/pty/pty.node.ts",
             "default": "./src/pty/pty.bun.ts"
         }
+    },
+    "exports": {
+        ".": "./src/index.ts",
+        "./session/runner": "./src/session/runner.ts"
     }
 }

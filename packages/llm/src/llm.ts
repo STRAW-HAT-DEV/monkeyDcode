@@ -121,6 +121,17 @@ export const LLM = {
         })
     },
 
+    // Promise-based API — no Effect import needed in consuming code.
+    async generateAsync(req: LLMRequest): Promise<LLMResponse> {
+        const route = resolveRoute(req)
+        const res = await doFetch(route, req)
+        const events: LLMEvent[] = []
+        for await (const line of readLines(res.body!)) {
+            events.push(...route.config.protocol.parseChunk(line))
+        }
+        return buildResponseFromEvents(events)
+    },
+
     async *stream(req: LLMRequest): AsyncIterable<LLMEvent> {
         const route = resolveRoute(req)
         let res: Response

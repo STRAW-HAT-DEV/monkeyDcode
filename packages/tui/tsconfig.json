@@ -2,7 +2,9 @@
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
         "jsx": "react-jsx",
-        "jsxImportSource": "@opentui/react"
+        "jsxImportSource": "@opentui/react",
+        "lib": ["ESNext", "DOM", "DOM.Iterable"],
+        "noUncheckedIndexedAccess": false
     },
     "include": ["src"]
 }

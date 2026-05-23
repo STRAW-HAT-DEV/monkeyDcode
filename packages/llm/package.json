@@ -20,7 +20,7 @@
     },
     "dependencies": {
         "@monkeydcode/core": "workspace:*",
-        "effect": "^3.16.8"
+        "effect": "4.0.0-beta.66"
     },
     "devDependencies": {
         "@types/bun": "latest"
