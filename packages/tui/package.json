@@ -9,15 +9,11 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "@opentui/core": "^0.2.10",
-        "@opentui/react": "^0.2.10",
-        "react": "^19.2.6",
-        "@monkeydcode/llm": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/llm": "workspace:*",
         "effect": "4.0.0-beta.66"
     },
     "devDependencies": {
-        "@types/bun": "latest",
-        "@types/react": "^19.0.0"
+        "@types/bun": "latest"
     }
 }

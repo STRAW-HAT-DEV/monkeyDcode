@@ -1,125 +1,112 @@
-import { createCliRenderer, TextAttributes } from "@opentui/core"
-import { createRoot } from "@opentui/react"
-import { useState } from "react"
+import { createInterface } from "readline"
 import { Runner } from "@monkeydcode/engine/session/runner"
 import { ollama } from "@monkeydcode/llm/providers/ollama"
 import type { ModelRef } from "@monkeydcode/llm"
 
-// ─── Session bootstrap ───────────────────────────────────────────────────────
-// Change model here to switch providers. Ollama runs locally with no API key.
-// Anthropic, OpenRouter require env vars: ANTHROPIC_API_KEY, OPENROUTER_API_KEY
 const MODEL: ModelRef = ollama.model("qwen2.5-coder:7b")
 const session = Runner.createSession(process.cwd())
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-interface ChatMessage {
-    role: "user" | "assistant" | "error"
-    text: string
+// ─── ANSI ────────────────────────────────────────────────────────────────────
+const R    = "\x1b[0m"
+const BOLD = "\x1b[1m"
+const DIM  = "\x1b[2m"
+const YELLOW  = "\x1b[33m"
+const CYAN    = "\x1b[36m"
+const GREEN   = "\x1b[32m"
+const RED     = "\x1b[91m"
+const MAGENTA = "\x1b[35m"
+
+// ─── Logo ─────────────────────────────────────────────────────────────────────
+const LOGO = `
+${YELLOW}${BOLD}                    _______________________________
+                 __/                               \\__
+                /   ~  ~  ~  ~  ~  ~  ~  ~  ~  ~    \\
+               /   ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~   \\
+     _________/___________________________________________\\_________
+    /  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~   \\
+   /  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  \\
+  '________________________________________________________________________'${R}
+
+${CYAN}${BOLD}  ███╗   ███╗ ██████╗ ███╗  ██╗██╗ ██╗███████╗██╗   ██╗${R}
+${CYAN}${BOLD}  ████╗ ████║██╔═══██╗████╗ ██║██║██╔╝██╔════╝╚██╗ ██╔╝${R}
+${CYAN}${BOLD}  ██╔████╔██║██║   ██║██╔██╗██║█████╔╝ █████╗   ╚████╔╝${R}
+${CYAN}${BOLD}  ██║╚██╔╝██║██║   ██║██║╚████║██╔═██╗ ██╔══╝    ╚██╔╝${R}
+${CYAN}${BOLD}  ██║ ╚═╝ ██║╚██████╔╝██║ ╚███║██║  ██╗███████╗   ██║${R}
+${CYAN}${BOLD}  ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚══╝╚═╝  ╚═╝╚══════╝   ╚═╝${R}
+
+${MAGENTA}${BOLD}  ·  ·  ·  ·  ·  ·  ·  ·  · ${R}${RED}${BOLD}  ██████╗  ${R}${MAGENTA}${BOLD} ·  ·  ·  ·  ·  ·  ·  ·  ·${R}
+${MAGENTA}${BOLD}  ·  ·  ·  ·  ·  ·  ·  ·  · ${R}${RED}${BOLD} ██╔══██╗ ${R}${MAGENTA}${BOLD} ·  ·  ·  ·  ·  ·  ·  ·  ·${R}
+${MAGENTA}${BOLD}  ·  ·  ·  ·  ·  ·  ·  ·  · ${R}${RED}${BOLD} ██║  ██║ ${R}${MAGENTA}${BOLD} ·  ·  ·  ·  ·  ·  ·  ·  ·${R}
+${MAGENTA}${BOLD}  ·  ·  ·  ·  ·  ·  ·  ·  · ${R}${RED}${BOLD} ██║  ██║ ${R}${MAGENTA}${BOLD} ·  ·  ·  ·  ·  ·  ·  ·  ·${R}
+${MAGENTA}${BOLD}  ·  ·  ·  ·  ·  ·  ·  ·  · ${R}${RED}${BOLD} ██████╔╝ ${R}${MAGENTA}${BOLD} ·  ·  ·  ·  ·  ·  ·  ·  ·${R}
+${MAGENTA}${BOLD}  ·  ·  ·  ·  ·  ·  ·  ·  · ${R}${RED}${BOLD} ╚═════╝  ${R}${MAGENTA}${BOLD} ·  ·  ·  ·  ·  ·  ·  ·  ·${R}
+
+${YELLOW}${BOLD}   ██████╗ ██████╗ ██████╗ ███████╗${R}
+${YELLOW}${BOLD}  ██╔════╝██╔═══██╗██╔══██╗██╔════╝${R}
+${YELLOW}${BOLD}  ██║     ██║   ██║██║  ██║█████╗${R}
+${YELLOW}${BOLD}  ██║     ██║   ██║██║  ██║██╔══╝${R}
+${YELLOW}${BOLD}  ╚██████╗╚██████╔╝██████╔╝███████╗${R}
+${YELLOW}${BOLD}   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝${R}
+
+${RED}${BOLD}  "I'm gonna be the king of the coding agents!"${R}
+`
+
+// ─── Separator ────────────────────────────────────────────────────────────────
+const SEP = `${DIM}  ${"─".repeat(70)}${R}`
+
+function printHeader() {
+    console.clear()
+    console.log(LOGO)
+    console.log(SEP)
+    console.log(`${DIM}  model   ${R}${CYAN}${MODEL.provider}/${MODEL.id}${R}`)
+    console.log(`${DIM}  session ${R}${CYAN}${session.id.slice(0, 8)}${R}`)
+    console.log(`${DIM}  /exit to quit${R}`)
+    console.log(SEP)
+    console.log()
 }
 
-// ─── App ─────────────────────────────────────────────────────────────────────
-function App() {
-    const [input, setInput] = useState("")
-    const [messages, setMessages] = useState<ChatMessage[]>([])
-    const [thinking, setThinking] = useState(false)
-    const [streamedText, setStreamedText] = useState("")
+function printUser(text: string) {
+    console.log(`\n  ${GREEN}${BOLD}you${R}`)
+    console.log(`  ${text}\n`)
+}
 
-    const submit = async () => {
-        if (!input.trim() || thinking) return
+function printAssistantStart() {
+    process.stdout.write(`\n  ${YELLOW}${BOLD}assistant${R}\n  `)
+}
 
-        const userText = input.trim()
-        setInput("")
-        setMessages((prev) => [...prev, { role: "user", text: userText }])
-        setThinking(true)
-        setStreamedText("")
+function printError(msg: string) {
+    console.log(`\n  ${RED}${BOLD}error${R}  ${msg}\n`)
+}
+
+// ─── Main loop ────────────────────────────────────────────────────────────────
+const rl = createInterface({ input: process.stdin, output: process.stdout })
+
+printHeader()
+
+function prompt() {
+    rl.question(`${CYAN}>${R} `, async (raw) => {
+        const text = raw.trim()
+        if (!text) { prompt(); return }
+        if (text === "/exit" || text === "/quit") {
+            console.log(`\n${YELLOW}${BOLD}  Yohohoho! Until next time, King.${R}\n`)
+            rl.close()
+            return
+        }
+
+        printUser(text)
+        printAssistantStart()
 
         try {
-            let full = ""
-
-            // Use streaming so tokens appear as they arrive
-            for await (const delta of Runner.streamChat(session.id, userText, MODEL)) {
-                full += delta
-                setStreamedText(full)
+            for await (const delta of Runner.streamChat(session.id, text, MODEL)) {
+                process.stdout.write(delta)
             }
-
-            setStreamedText("")
-            setMessages((prev) => [...prev, { role: "assistant", text: full }])
         } catch (e) {
-            setStreamedText("")
-            setMessages((prev) => [
-                ...prev,
-                { role: "error", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            ])
-        } finally {
-            setThinking(false)
+            printError(e instanceof Error ? e.message : String(e))
         }
-    }
 
-    return (
-        <box flexDirection="column" flexGrow={1}>
-
-            {/* ── Header ── */}
-            <box padding={1}>
-                <ascii-font font="tiny" text="monkeyDcode" />
-            </box>
-            <box paddingLeft={1} paddingBottom={1}>
-                <text attributes={TextAttributes.DIM}>
-                    {MODEL.provider}/{MODEL.id} · session {session.id.slice(0, 8)}
-                </text>
-            </box>
-
-            {/* ── Message list ── */}
-            <box flexDirection="column" flexGrow={1} paddingLeft={2} paddingRight={2}>
-                {messages.length === 0 && !thinking && (
-                    <text attributes={TextAttributes.DIM}>
-                        Type a message and press Enter to start...
-                    </text>
-                )}
-
-                {messages.map((m, i) => (
-                    <box key={i} flexDirection="column" paddingBottom={1}>
-                        <text
-                            attributes={
-                                m.role === "user"
-                                    ? TextAttributes.BOLD
-                                    : m.role === "error"
-                                      ? TextAttributes.BOLD
-                                      : TextAttributes.DIM
-                            }
-                        >
-                            {m.role === "user" ? "you" : m.role === "error" ? "error" : "assistant"}
-                        </text>
-                        <text>{m.text}</text>
-                    </box>
-                ))}
-
-                {/* Live streaming output */}
-                {thinking && streamedText !== "" && (
-                    <box flexDirection="column" paddingBottom={1}>
-                        <text attributes={TextAttributes.DIM}>assistant</text>
-                        <text>{streamedText}</text>
-                    </box>
-                )}
-
-                {/* Spinner while waiting for first token */}
-                {thinking && streamedText === "" && (
-                    <text attributes={TextAttributes.DIM}>thinking...</text>
-                )}
-            </box>
-
-            {/* ── Input bar ── */}
-            <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
-                <text attributes={TextAttributes.DIM}>{thinking ? "  " : "> "}</text>
-                <input
-                    value={input}
-                    onChange={setInput}
-                    onSubmit={submit}
-                />
-            </box>
-
-        </box>
-    )
+        console.log("\n")
+        prompt()
+    })
 }
 
-const renderer = await createCliRenderer()
-createRoot(renderer).render(<App />)
+prompt()
