@@ -10,8 +10,9 @@
     },
     "dependencies": {
         "@monkeydcode/core": "workspace:*",
-        "@monkeydcode/llm": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
-        "@monkeydcode/python-bridge": "workspace:*"
+        "@monkeydcode/llm": "workspace:*",
+        "@monkeydcode/python-bridge": "workspace:*",
+        "fastest-levenshtein": "^1.0.16"
     }
 }
