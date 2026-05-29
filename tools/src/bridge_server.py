@@ -1,3 +1,8 @@
+from .vector_store import index_files, search
+
+server.register("vectorStore.index", index_files)
+server.register("vectorStore.search", search)
+
 import asyncio
 import json
 import sys
@@ -26,7 +31,7 @@ class BridgeServer:
                     resp = {"jsonrpc": "2.0", "id": req["id"], "result": result}
                 else:
                     resp = {"jsonrpc": "2.0", "id": req["id"],
-                            "error": {"code": -32601, "message": f"Method not found"}}
+                            "error": {"code": -32601, "message": "Method not found"}}
             except Exception as e:
                 resp = {"jsonrpc": "2.0", "id": req.get("id"),
                         "error": {"code": -32000, "message": str(e)}}
