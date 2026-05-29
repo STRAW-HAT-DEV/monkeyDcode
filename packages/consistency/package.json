@@ -4,15 +4,29 @@
     "private": true,
     "type": "module",
     "main": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./sampler": "./src/sampler.ts",
+        "./grader": "./src/grader.ts",
+        "./verification/pipeline": "./src/verification/pipeline.ts",
+        "./verification/*": "./src/verification/*.ts",
+        "./model-capability/detector": "./src/model-capability/detector.ts",
+        "./model-capability/registry": "./src/model-capability/registry.ts",
+        "./model-capability/*": "./src/model-capability/*.ts"
+    },
     "scripts": {
         "typecheck": "tsc --noEmit",
         "test": "bun test"
     },
     "dependencies": {
         "@monkeydcode/core": "workspace:*",
-        "@monkeydcode/engine": "workspace:*",
         "@monkeydcode/llm": "workspace:*",
         "@monkeydcode/python-bridge": "workspace:*",
+        "effect": "4.0.0-beta.66",
+        "zod": "4.1.8",
         "fastest-levenshtein": "^1.0.16"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
     }
 }

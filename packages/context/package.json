@@ -4,13 +4,26 @@
     "private": true,
     "type": "module",
     "main": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./retriever": "./src/retriever.ts",
+        "./signature-index": "./src/signature-index.ts",
+        "./vector_store": "./src/vector_store.ts",
+        "./compaction": "./src/compaction.ts",
+        "./working-memory": "./src/working-memory.ts"
+    },
     "scripts": {
         "typecheck": "tsc --noEmit",
         "test": "bun test"
     },
     "dependencies": {
         "@monkeydcode/core": "workspace:*",
-        "@monkeydcode/engine": "workspace:*",
-        "@monkeydcode/python-bridge": "workspace:*"
+        "@monkeydcode/llm": "workspace:*",
+        "@monkeydcode/python-bridge": "workspace:*",
+        "effect": "4.0.0-beta.66",
+        "zod": "4.1.8"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
     }
 }

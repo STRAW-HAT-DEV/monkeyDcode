@@ -1,16 +1,16 @@
-import type { VerificationResult, VerificationError, Stage, StageResult } from "./types.ts"
 import { DEFAULT_CONFIG, type VerificationConfig } from "./config.ts"
-import * as Syntax from "./syntax.ts"
-import * as TypeCheck from "./typecheck.ts"
 import * as Lint from "./lint.ts"
+import * as Syntax from "./syntax.ts"
 import * as Tests from "./test-existing.ts"
+import * as TypeCheck from "./typecheck.ts"
+import type { Stage, StageResult, VerificationError, VerificationResult } from "./types.ts"
 
 const STAGE_WEIGHTS: Record<string, number> = {
-    syntax: 0.10,
-    typecheck: 0.30,
-    lint: 0.10,
-    tests: 0.40,
-    smoke: 0.10,
+    syntax: 0.1,
+    typecheck: 0.3,
+    lint: 0.1,
+    tests: 0.4,
+    smoke: 0.1,
 }
 
 export async function run(
@@ -79,9 +79,7 @@ export function formatErrors(result: VerificationResult): string {
     ]
 
     for (const err of result.errors.slice(0, 30)) {
-        const loc = err.column
-            ? `${err.file}:${err.line}:${err.column}`
-            : `${err.file}:${err.line}`
+        const loc = err.column ? `${err.file}:${err.line}:${err.column}` : `${err.file}:${err.line}`
         const rule = err.rule ? ` [${err.rule}]` : ""
         lines.push(`  ${loc}${rule}: ${err.message}`)
     }

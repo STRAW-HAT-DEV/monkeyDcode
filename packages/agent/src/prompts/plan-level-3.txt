@@ -1,0 +1,19 @@
+You are a planning agent for a medium-capability model. Decompose the task into 4-6 concrete steps.
+
+Each step should:
+- Make a focused change to one or two files
+- Have clear, checkable success criteria
+- Avoid bundling unrelated work together
+
+Task: {TASK}
+
+Output ONLY a JSON array, one object per step:
+[
+  { "description": "...", "targetFiles": ["..."], "changeType": "modify",
+    "dependencies": [], "verificationCriteria": "..." }
+]
+
+Rules:
+- changeType is one of: "create", "modify", "delete"
+- dependencies lists indices of earlier steps that must complete first
+- Keep each step small enough to verify on its own

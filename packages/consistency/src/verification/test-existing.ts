@@ -1,9 +1,13 @@
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import { $ } from "bun"
-import { existsSync, readFileSync } from "fs"
-import { join } from "path"
 import type { StageResult, VerificationError } from "./types.ts"
 
-export async function run(projectRoot: string, timeoutMs: number): Promise<StageResult> {
+// SECURITY NOTE: this stage runs the *target project's* own test command
+// (`bun test`, `bun run test`, or `pytest`) inside `projectRoot`. There is no
+// per-file attack vector here, but the project root itself is trusted — never
+// invoke this against an attacker-controlled directory.
+export async function run(projectRoot: string, _timeoutMs: number): Promise<StageResult> {
     const start = Date.now()
 
     const runner = detectTestRunner(projectRoot)
@@ -36,7 +40,7 @@ function detectTestRunner(projectRoot: string): TestRunner | null {
 
             // bun:test native runner
             if (testScript.includes("bun test") || testScript === "") {
-                const bunTestExists = $`bun test --dry-run`.cwd(projectRoot).quiet().nothrow()
+                const _bunTestExists = $`bun test --dry-run`.cwd(projectRoot).quiet().nothrow()
                 return {
                     command: $`bun test`.cwd(projectRoot).quiet().nothrow() as any,
                     parse: parseBunTestOutput,
@@ -75,8 +79,8 @@ function parseBunTestOutput(output: string): VerificationError[] {
         if (loc && errors.length > 0) {
             const last = errors[errors.length - 1]!
             last.file = loc[1]!
-            last.line = parseInt(loc[2]!)
-            last.column = parseInt(loc[3]!)
+            last.line = Number.parseInt(loc[2]!)
+            last.column = Number.parseInt(loc[3]!)
         }
     }
     return errors
@@ -94,6 +98,9 @@ function parsePytestOutput(output: string): VerificationError[] {
 }
 
 function parseGenericTestOutput(output: string): VerificationError[] {
-    const lines = output.split("\n").filter(l => /fail|error/i.test(l)).slice(0, 20)
-    return lines.map(l => ({ file: "", line: 0, message: l.trim(), severity: "error" as const }))
+    const lines = output
+        .split("\n")
+        .filter((l) => /fail|error/i.test(l))
+        .slice(0, 20)
+    return lines.map((l) => ({ file: "", line: 0, message: l.trim(), severity: "error" as const }))
 }

@@ -45,6 +45,18 @@ function resolveRoute(req: LLMRequest): Route {
 async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     const { protocol, baseUrl, apiKey, defaultHeaders = {} } = route.config
     const key = apiKey() ?? ""
+
+    // Fail fast on a missing key instead of sending an unauthenticated request
+    // that returns an opaque 401. Ollama runs locally and needs no real key.
+    if (req.model.provider !== "ollama" && !key) {
+        const envVar = `${req.model.provider.toUpperCase()}_API_KEY`
+        throw new LLMError(
+            `Missing API key for provider "${req.model.provider}". Set ${envVar}.`,
+            "auth_failed",
+            req.model.provider,
+        )
+    }
+
     const url = `${baseUrl}${protocol.buildPath(req.model.id)}`
     const headers = { ...defaultHeaders, ...protocol.buildHeaders(key) }
     const body = JSON.stringify(protocol.buildBody(req))

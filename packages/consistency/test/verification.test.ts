@@ -1,17 +1,20 @@
-import { test, expect, beforeAll, afterAll } from "bun:test"
-import { writeFile, unlink, mkdir } from "fs/promises"
-import { join } from "path"
-import * as Pipeline from "../src/verification/pipeline.ts"
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import { rm, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { makeTempDir } from "@monkeydcode/core/util/tmp"
 import { DEFAULT_CONFIG } from "../src/verification/config.ts"
+import * as Pipeline from "../src/verification/pipeline.ts"
 
-const TMP = "/tmp/mdc-verify-test"
+// Unpredictable temp dir (no fixed /tmp path) — also regression-proves the
+// TOCTOU hardening in verification/syntax.ts.
+let TMP = ""
 
 beforeAll(async () => {
-    await mkdir(TMP, { recursive: true })
+    TMP = await makeTempDir("mdc-verify-test-")
 })
 
 afterAll(async () => {
-    // cleanup handled by OS /tmp rotation
+    if (TMP) await rm(TMP, { recursive: true, force: true })
 })
 
 test("passes valid TypeScript", async () => {
@@ -25,7 +28,7 @@ test("passes valid TypeScript", async () => {
 
 test("fails on TypeScript syntax error", async () => {
     const f = join(TMP, "syntax-error.ts")
-    await writeFile(f, "export const x = {\n")  // unclosed brace
+    await writeFile(f, "export const x = {\n") // unclosed brace
 
     const r = await Pipeline.run([f], TMP, { ...DEFAULT_CONFIG, stages: ["syntax"] })
     expect(r.passed).toBe(false)
@@ -34,7 +37,7 @@ test("fails on TypeScript syntax error", async () => {
 
 test("returns score=0 when syntax fails", async () => {
     const f = join(TMP, "broken.ts")
-    await writeFile(f, "const x = (\n")  // incomplete expression
+    await writeFile(f, "const x = (\n") // incomplete expression
 
     const r = await Pipeline.run([f], TMP, { ...DEFAULT_CONFIG, stages: ["syntax"] })
     expect(r.score).toBe(0)
@@ -82,7 +85,7 @@ test("Python syntax check passes valid file", async () => {
 
 test("Python syntax check fails on invalid file", async () => {
     const f = join(TMP, "invalid.py")
-    await writeFile(f, "def broken(\n")  // unclosed paren
+    await writeFile(f, "def broken(\n") // unclosed paren
 
     const r = await Pipeline.run([f], TMP, { ...DEFAULT_CONFIG, stages: ["syntax"] })
     expect(r.passed).toBe(false)

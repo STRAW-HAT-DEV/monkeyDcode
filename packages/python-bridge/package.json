@@ -4,11 +4,20 @@
     "private": true,
     "type": "module",
     "main": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./bridge": "./src/bridge.ts",
+        "./client": "./src/client.ts"
+    },
     "scripts": {
         "typecheck": "tsc --noEmit",
         "test": "bun test"
     },
     "dependencies": {
-        "@monkeydcode/core": "workspace:*"
+        "@monkeydcode/core": "workspace:*",
+        "effect": "4.0.0-beta.66"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
     }
 }

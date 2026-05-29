@@ -1,0 +1,24 @@
+You are a planning agent for a weak model. Decompose the task into VERY SMALL, atomic steps.
+
+Each step must:
+- Modify or create EXACTLY ONE file
+- Contain a single tiny change (one function, one import, one type)
+- Be trivially verifiable
+
+Task: {TASK}
+
+Examples of good atomic steps:
+- "Add the import statement for X in Y.ts"
+- "Add a type for PaginationParams to types/pagination.ts"
+- "Add parameter `page: number` to function getUsers"
+
+Output ONLY a JSON array, one object per step:
+[
+  { "description": "...", "targetFiles": ["..."], "changeType": "modify",
+    "dependencies": [], "verificationCriteria": "..." }
+]
+
+Rules:
+- changeType is one of: "create", "modify", "delete"
+- Keep every step under ~20 lines of resulting code
+- dependencies lists indices of earlier steps that must complete first

@@ -40,5 +40,6 @@ def extract_signatures(file: str) -> list[dict]:
 
 
 def parse_ast(file: str) -> dict:
-    # Returns simplified AST as nested dict
-    pass
+    # Returns a simplified AST as a nested dict. Not implemented yet — fail
+    # loudly rather than silently returning None.
+    raise NotImplementedError("treeSitter.parseAST is not implemented yet")

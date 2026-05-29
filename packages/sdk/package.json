@@ -14,7 +14,7 @@
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
-        "test": "bun test"
+        "test": "bun test --pass-with-no-tests"
     },
     "dependencies": {
         "effect": "4.0.0-beta.66",

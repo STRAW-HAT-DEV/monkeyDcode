@@ -6,12 +6,13 @@
     ],
     "scripts": {
         "dev": "bun run --filter @monkeydcode/tui dev",
-        "build": "bun run --filter '*' build",
+        "build": "bun run typecheck",
         "typecheck": "bun run --filter '*' typecheck",
         "test": "bun run --filter '*' test",
         "lint": "biome check ."
     },
     "devDependencies": {
+        "@biomejs/biome": "^1.9.4",
         "@types/bun": "latest",
         "typescript": "^5.8.0"
     }

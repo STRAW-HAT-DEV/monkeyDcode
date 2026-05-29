@@ -1,3 +1,6 @@
+import { Effect } from "effect"
+import { PythonBridge } from "./bridge.ts"
+
 export interface Signature {
     name: string
     parameters: string
@@ -10,5 +13,5 @@ export const treeSitter = {
         Effect.gen(function* () {
             const bridge = yield* PythonBridge
             return yield* bridge.call<Signature[]>("treeSitter.extractSignatures", { file })
-        })
+        }),
 }

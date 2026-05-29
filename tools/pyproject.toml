@@ -31,4 +31,13 @@ dependencies = [
 [dependency-groups]
 dev = [
     "ruff>=0.15.13",
+    "pytest>=8.3.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = [
+    "heavy: tests that require chromadb / sentence-transformers (excluded by default)",
+]
+addopts = "-m 'not heavy'"

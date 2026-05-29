@@ -1,19 +1,31 @@
+import { existsSync } from "node:fs"
+import { rm } from "node:fs/promises"
+import { confine, withDashGuard } from "@monkeydcode/core/util/fs-guard"
+import { makeTempDir } from "@monkeydcode/core/util/tmp"
 import { $ } from "bun"
-import { existsSync } from "fs"
 import type { StageResult, VerificationError } from "./types.ts"
 
-export async function check(files: string[], _projectRoot: string): Promise<StageResult> {
+export async function check(files: string[], projectRoot: string): Promise<StageResult> {
     const start = Date.now()
-    const tsFiles = files.filter(f => /\.tsx?$/.test(f)).filter(existsSync)
-    const pyFiles = files.filter(f => f.endsWith(".py")).filter(existsSync)
+    // Security: confine every input under the trusted project root (blocks
+    // traversal) so a model-generated path list can't reach outside the sandbox.
+    const confined = files.map((f) => confine(projectRoot, f))
+    const tsFiles = confined.filter((f) => /\.tsx?$/.test(f)).filter(existsSync)
+    const pyFiles = confined.filter((f) => f.endsWith(".py")).filter(existsSync)
 
     const errors: VerificationError[] = []
 
     if (tsFiles.length > 0) {
-        // bun build strips types and fails only on real syntax errors — fastest syntax gate
-        const r = await $`bun build --target bun --outdir /tmp/mdc-syntax ${tsFiles}`.quiet().nothrow()
-        if (r.exitCode !== 0) {
-            errors.push(...parseBunBuildErrors(r.stderr.toString()))
+        // bun build strips types and fails only on real syntax errors — fastest syntax gate.
+        // Use an unpredictable temp outdir (no fixed /tmp path → no symlink/TOCTOU race).
+        const outdir = await makeTempDir("mdc-syntax-")
+        try {
+            const r = await $`bun build --target bun --outdir ${outdir} ${withDashGuard(tsFiles)}`.quiet().nothrow()
+            if (r.exitCode !== 0) {
+                errors.push(...parseBunBuildErrors(r.stderr.toString()))
+            }
+        } finally {
+            await rm(outdir, { recursive: true, force: true })
         }
     }
 
@@ -37,8 +49,8 @@ function parseBunBuildErrors(stderr: string): VerificationError[] {
         if (loc) {
             errors.push({
                 file: loc[1]!,
-                line: parseInt(loc[2]!),
-                column: parseInt(loc[3]!),
+                line: Number.parseInt(loc[2]!),
+                column: Number.parseInt(loc[3]!),
                 message: "Syntax error",
                 severity: "error",
             })
@@ -49,8 +61,8 @@ function parseBunBuildErrors(stderr: string): VerificationError[] {
         if (generic) {
             errors.push({
                 file: generic[1]!,
-                line: parseInt(generic[2]!),
-                column: parseInt(generic[3]!),
+                line: Number.parseInt(generic[2]!),
+                column: Number.parseInt(generic[3]!),
                 message: generic[4]!,
                 severity: "error",
             })
