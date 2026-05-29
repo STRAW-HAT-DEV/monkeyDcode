@@ -36,3 +36,17 @@ function executeStep(step: PlanStep, modelId: string, index: number) {
         })
     })
 }
+
+const context = yield* Retriever.retrieve({
+    files: step.targetFiles,
+    description: step.description
+})
+
+const prompt = `
+${Retriever.formatForPrompt(context)}
+
+## Task
+${step.description}
+
+Generate the code change.
+`
