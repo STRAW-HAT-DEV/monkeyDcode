@@ -17,6 +17,7 @@
         "@monkeydcode/context": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
         "@monkeydcode/llm": "workspace:*",
+        "effect": "4.0.0-beta.66",
       },
     },
     "packages/consistency": {
@@ -27,6 +28,7 @@
         "@monkeydcode/engine": "workspace:*",
         "@monkeydcode/llm": "workspace:*",
         "@monkeydcode/python-bridge": "workspace:*",
+        "effect": "4.0.0-beta.66",
         "fastest-levenshtein": "^1.0.16",
       },
     },
@@ -36,7 +38,9 @@
       "dependencies": {
         "@monkeydcode/core": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/llm": "workspace:*",
         "@monkeydcode/python-bridge": "workspace:*",
+        "effect": "4.0.0-beta.66",
       },
     },
     "packages/core": {
@@ -213,6 +217,10 @@
       "version": "0.1.0",
       "dependencies": {
         "@monkeydcode/core": "workspace:*",
+        "effect": "4.0.0-beta.66",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
       },
     },
     "packages/sdk": {

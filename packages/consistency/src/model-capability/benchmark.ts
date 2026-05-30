@@ -1,3 +1,10 @@
+import { Effect } from "effect"
+import { LLM } from "@monkeydcode/llm"
+import type { ModelRef } from "@monkeydcode/llm"
+import * as Pipeline from "../verification/pipeline.ts"
+import type { CapabilityLevel } from "./registry.ts"
+import { writeFile } from "fs/promises"
+
 const PROBE_TASK = `Implement:
 export function parseCSV(input: string): Record<string, string>[]
 
@@ -15,25 +22,35 @@ test("quoted", () => {
     expect(parseCSV('n,b\\nA,"x,y"')).toEqual([{ n: "A", b: "x,y" }])
 })`
 
-export function runBenchmark(modelId: string) {
+export function runBenchmark(model: ModelRef): Effect.Effect<CapabilityLevel, unknown> {
     return Effect.gen(function* () {
-        const response = yield* LLM.generate({
-            model: resolveModel(modelId),
-            prompt: PROBE_TASK,
-            generation: { temperature: 0.3 }
-        })
+        const response = yield* Effect.promise(() =>
+            LLM.generateAsync({
+                model,
+                messages: [{ role: "user", content: PROBE_TASK }],
+            })
+        )
 
         const code = extractCode(response.text)
-        yield* writeFiles({ "/tmp/probe.ts": code, "/tmp/probe.test.ts": PROBE_TESTS })
+        yield* Effect.promise(() => Promise.all([
+            writeFile("/tmp/mdc-probe.ts", code),
+            writeFile("/tmp/mdc-probe.test.ts", PROBE_TESTS),
+        ]))
 
-        const result = yield* Pipeline.run(["/tmp/probe.ts", "/tmp/probe.test.ts"])
+        const result = yield* Effect.promise(() =>
+            Pipeline.run(["/tmp/mdc-probe.ts", "/tmp/mdc-probe.test.ts"], "/tmp")
+        )
 
-        // Score -> capability level
-        if (result.score >= 0.95) return 1
-        if (result.score >= 0.85) return 2
-        if (result.score >= 0.70) return 3
-        if (result.score >= 0.50) return 4
-        if (result.score >= 0.30) return 5
-        return 6
+        if (result.score >= 0.95) return 1 as CapabilityLevel
+        if (result.score >= 0.85) return 2 as CapabilityLevel
+        if (result.score >= 0.70) return 3 as CapabilityLevel
+        if (result.score >= 0.50) return 4 as CapabilityLevel
+        if (result.score >= 0.30) return 5 as CapabilityLevel
+        return 6 as CapabilityLevel
     })
+}
+
+function extractCode(text: string): string {
+    const match = text.match(/```(?:typescript|ts)?\n([\s\S]*?)```/)
+    return match?.[1] ?? text
 }
