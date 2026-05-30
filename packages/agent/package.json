@@ -12,6 +12,7 @@
         "@monkeydcode/consistency": "workspace:*",
         "@monkeydcode/context": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
-        "@monkeydcode/llm": "workspace:*"
+        "@monkeydcode/llm": "workspace:*",
+        "effect": "4.0.0-beta.66"
     }
 }
