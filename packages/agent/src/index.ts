@@ -1,2 +1,9 @@
-// @monkeydcode/agent — placeholder until Step 5+
-export {}
+export * from "./orchestrator.ts"
+export * from "./review-agent.ts"
+export * from "./plan-agent.ts"
+export * from "./build-agent.ts"
+export * from "./working-memory.ts"
+export * as BugFix from "./sub-agents/bugfix.ts"
+export * as Feature from "./sub-agents/feature.ts"
+export * as Refactor from "./sub-agents/refactor.ts"
+export * as Debug from "./sub-agents/debug.ts"
