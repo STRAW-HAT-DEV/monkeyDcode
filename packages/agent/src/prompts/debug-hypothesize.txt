@@ -1,0 +1,23 @@
+Analyze this error and generate 3-5 hypotheses for the root cause, ordered from most to least likely.
+
+For each hypothesis:
+- State the cause precisely (not vaguely)
+- Identify the exact file and function where the root cause lives
+- Describe a concrete test that would confirm or refute this hypothesis
+
+Error / traceback:
+{TRACEBACK}
+
+Relevant code context:
+{CONTEXT}
+
+Output JSON array:
+[{
+  "hypothesis": "specific cause statement",
+  "likelihood": "high" | "medium" | "low",
+  "location": { "file": "...", "function": "...", "line": N },
+  "confirmationTest": "describe a test that proves/disproves this"
+}]
+
+Think like a debugger, not a guesser. Be specific.
+Output ONLY the JSON array.

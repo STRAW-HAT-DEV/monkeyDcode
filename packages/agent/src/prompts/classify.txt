@@ -1,0 +1,20 @@
+Classify this developer message into exactly one category.
+
+Categories:
+- "bug_fix" — the user is reporting a bug, error, crash, or unexpected behavior
+- "feature" — the user wants new functionality added
+- "refactor" — the user wants existing code restructured without changing behavior
+- "debug" — the user has an error traceback or is asking why something isn't working
+- "general" — anything else (question, explanation request, other task)
+
+Message:
+{MESSAGE}
+
+Rules:
+- If the message contains a stack trace or exception → "debug"
+- If the message says "fix", "broken", "error", "bug", "crash", "fails" → "bug_fix"
+- If the message says "add", "implement", "build", "create", "new feature" → "feature"
+- If the message says "refactor", "clean up", "restructure", "reorganize" → "refactor"
+- When ambiguous between bug_fix and debug: if there's a traceback → "debug", else → "bug_fix"
+
+Output ONLY the category string. Nothing else. No explanation.
