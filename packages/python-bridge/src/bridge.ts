@@ -4,6 +4,8 @@ import { join } from "path"
 import { fileURLToPath } from "url"
 
 const TOOLS_DIR = join(fileURLToPath(import.meta.url), "../../../../tools")
+const SOCKET_PATH = `/tmp/mdc-bridge-${process.pid}.sock`
+const READY_TIMEOUT_MS = 8000  // weak machines may need longer to import tree-sitter
 
 interface BridgeState {
     socket: Socket
@@ -13,27 +15,63 @@ interface BridgeState {
 }
 
 let _state: BridgeState | null = null
+let _connecting: Promise<BridgeState> | null = null
 
 async function getState(): Promise<BridgeState> {
     if (_state) return _state
+    // Prevent concurrent connect attempts
+    if (_connecting) return _connecting
+    _connecting = connect().finally(() => { _connecting = null })
+    return _connecting
+}
 
-    const socketPath = `/tmp/mdc-bridge-${process.pid}.sock`
-
-    const proc = spawn("python3", [
+async function connect(): Promise<BridgeState> {
+    const proc = spawn("uv", [
+        "run", "python3",
         join(TOOLS_DIR, "src", "bridge_server.py"),
-        socketPath,
-    ], { stdio: ["ignore", "pipe", "pipe"], cwd: TOOLS_DIR })
+        SOCKET_PATH,
+    ], {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: TOOLS_DIR,
+    })
 
-    // Give the Python server up to 3 s to start
-    await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 3000)
-        proc.stdout?.once("data", () => { clearTimeout(timer); resolve() })
-        proc.once("error", () => { clearTimeout(timer); resolve() })
+    proc.stderr?.on("data", (d: Buffer) => {
+        // Surface Python-side warnings/errors during development
+        process.stderr.write(`[bridge] ${d.toString()}`)
+    })
+
+    // Wait for "ready\n" on stdout, or timeout
+    await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            // Timeout is not fatal — server may still be starting; try to connect anyway
+            resolve()
+        }, READY_TIMEOUT_MS)
+
+        let buf = ""
+        proc.stdout?.on("data", (d: Buffer) => {
+            buf += d.toString()
+            if (buf.includes("ready")) {
+                clearTimeout(timer)
+                resolve()
+            }
+        })
+
+        proc.once("error", (e) => {
+            clearTimeout(timer)
+            reject(e)
+        })
+
+        proc.once("exit", (code) => {
+            if (code !== null && code !== 0) {
+                clearTimeout(timer)
+                reject(new Error(`Bridge process exited with code ${code}`))
+            }
+        })
     })
 
     const socket = new Socket()
     await new Promise<void>((resolve, reject) => {
-        socket.connect(socketPath, resolve)
+        socket.connect(SOCKET_PATH, resolve)
         socket.once("error", reject)
     })
 
@@ -61,6 +99,9 @@ async function getState(): Promise<BridgeState> {
         }
     })
 
+    socket.once("close", () => { _state = null })
+    socket.once("error", () => { _state = null })
+
     _state = s
     return s
 }
@@ -75,6 +116,16 @@ export async function call<T>(method: string, params?: unknown): Promise<T> {
             if (err) { s.pending.delete(id); reject(err) }
         })
     })
+}
+
+/** Ping the bridge — returns true if alive, false if not reachable */
+export async function ping(): Promise<boolean> {
+    try {
+        const result = await call<string>("ping")
+        return result === "pong"
+    } catch {
+        return false
+    }
 }
 
 export function shutdown() {

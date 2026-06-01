@@ -1,10 +1,15 @@
 import { Effect } from "effect"
+import { readFile, writeFile } from "fs/promises"
+import { existsSync } from "fs"
+import { basename, extname } from "path"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
 import * as Pipeline from "./verification/pipeline.ts"
 import type { VerificationResult } from "./verification/types.ts"
 import * as Capability from "./model-capability/detector.ts"
 import * as Grader from "./grader.ts"
+
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface SamplingTask {
     prompt: string
@@ -24,6 +29,8 @@ export interface SamplingResult {
     confidence: number
 }
 
+// ─── Temperature sets by model capability level ───────────────────────────────
+
 const TEMP_SETS: Record<number, number[]> = {
     1: [0.3],
     2: [0.3],
@@ -33,20 +40,27 @@ const TEMP_SETS: Record<number, number[]> = {
     6: [0.3, 0.4, 0.5, 0.6],
 }
 
+// ─── Main sampling loop ───────────────────────────────────────────────────────
+
 export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingResult, unknown> {
     return Effect.gen(function* () {
         const level = yield* Capability.detect(task.modelId)
         const temps = TEMP_SETS[level] ?? [0.5]
 
+        // Generate all candidates concurrently (no file I/O yet)
         const candidates = yield* Effect.all(
             temps.map(t => generateCandidate(task, t)),
             { concurrency: "unbounded" },
         )
 
-        const verified = yield* Effect.all(
-            candidates.map(c => verifyCandidate(c, task.files)),
-            { concurrency: "unbounded" },
-        )
+        // Verify sequentially — each verification writes to actual project files,
+        // verifies tsc/lint/tests in real project context, then restores originals.
+        // Cannot be concurrent: they'd corrupt each other's file writes.
+        const verified: Candidate[] = []
+        for (const c of candidates) {
+            const result = yield* verifyCandidate(c, task.files)
+            verified.push(result)
+        }
 
         const passing = verified.filter(c => c.verification.passed)
 
@@ -56,7 +70,10 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
                 return { selected: { ...best, rrpScore: 0 }, confidence: 0 }
             }
             const errors = verified.flatMap(v => v.verification.errors)
-            const retryPrompt = task.prompt + "\n\nPrevious attempt failed:\n" + JSON.stringify(errors, null, 2)
+            const retryPrompt =
+                task.prompt +
+                "\n\nPrevious attempt failed verification. Fix these errors:\n" +
+                JSON.stringify(errors, null, 2)
             return yield* sample({ ...task, prompt: retryPrompt }, retries + 1)
         }
 
@@ -66,22 +83,186 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
     })
 }
 
+// ─── Candidate generation ─────────────────────────────────────────────────────
+
 function generateCandidate(task: SamplingTask, temperature: number): Effect.Effect<Candidate, unknown> {
-    return Effect.gen(function* () {
-        const response = yield* Effect.promise(() =>
-            LLM.generateAsync({
-                model: task.model,
-                messages: [{ role: "user", content: task.prompt }],
-            })
+    return Effect.promise(() =>
+        LLM.generateAsync({
+            model: task.model,
+            messages: [{ role: "user", content: task.prompt }],
+        }).then(r => ({
+            change: r.text,
+            temperature,
+            verification: null as unknown as VerificationResult,
+        }))
+    )
+}
+
+// ─── Candidate verification ───────────────────────────────────────────────────
+// Write generated code to actual project files, run the full pipeline,
+// then ALWAYS restore the originals — whether the pipeline passed or threw.
+
+function verifyCandidate(candidate: Candidate, files: string[]): Effect.Effect<Candidate, unknown> {
+    return Effect.tryPromise(async () => {
+        const projectRoot = detectProjectRoot(files)
+
+        // 1. Save original file contents so we can restore them
+        const originals = await Promise.all(
+            files.map(async f => ({
+                file: f,
+                content: existsSync(f) ? await readFile(f, "utf-8") : null,
+            }))
         )
-        return { change: response.text, temperature, verification: null as unknown as VerificationResult }
+
+        try {
+            // 2. Apply generated code to the actual target files
+            await applyGeneratedCode(candidate.change, files)
+
+            // 3. Run full verification pipeline against the real project
+            const verification = await Pipeline.run(files, projectRoot)
+            return { ...candidate, verification }
+        } finally {
+            // 4. Always restore originals, whether pipeline passed, failed, or threw
+            await Promise.all(
+                originals.map(async ({ file, content }) => {
+                    if (content !== null) await writeFile(file, content)
+                })
+            )
+        }
     })
 }
 
-function verifyCandidate(candidate: Candidate, files: string[]): Effect.Effect<Candidate, unknown> {
-    return Effect.gen(function* () {
-        const projectRoot = files[0] ? files[0].split("/").slice(0, -1).join("/") : process.cwd()
-        const verification = yield* Effect.promise(() => Pipeline.run(files, projectRoot))
-        return { ...candidate, verification }
-    })
+// ─── Project root detection ───────────────────────────────────────────────────
+
+function detectProjectRoot(files: string[]): string {
+    if (files.length === 0) return process.cwd()
+    const parts = files[0]!.split("/")
+    for (let i = parts.length - 1; i > 0; i--) {
+        const dir = parts.slice(0, i).join("/")
+        if (existsSync(`${dir}/package.json`) || existsSync(`${dir}/tsconfig.json`)) {
+            return dir
+        }
+    }
+    return parts.slice(0, -1).join("/")
+}
+
+// ─── Code extraction (write generated code to target files) ───────────────────
+
+async function applyGeneratedCode(change: string, targetFiles: string[]): Promise<void> {
+    const blocks = extractCodeBlocks(change)
+
+    if (blocks.length === 0) {
+        // No code fences — write raw text to single-file target
+        if (targetFiles.length === 1 && targetFiles[0]) {
+            await writeFile(targetFiles[0], change.trim())
+        }
+        return
+    }
+
+    if (targetFiles.length === 1 && targetFiles[0]) {
+        const best = matchBlockToFile(blocks, targetFiles[0]) ?? blocks[0]!.code
+        await writeFile(targetFiles[0], best)
+        return
+    }
+
+    // Multiple targets: match each to its block
+    const unmatched: string[] = []
+    for (const f of targetFiles) {
+        const code = matchBlockToFile(blocks, f)
+        if (code !== null) await writeFile(f, code)
+        else unmatched.push(f)
+    }
+
+    // Fallback: one remaining unmatched file + one remaining block
+    if (unmatched.length === 1 && blocks.length === 1) {
+        await writeFile(unmatched[0]!, blocks[0]!.code)
+    }
+}
+
+// ─── Code block extraction ────────────────────────────────────────────────────
+
+interface CodeBlock {
+    filename?: string
+    language?: string
+    code: string
+}
+
+function extractCodeBlocks(text: string): CodeBlock[] {
+    const blocks: CodeBlock[] = []
+    const fenceRegex = /```(\w+)?(?::([^\n`]+))?\n([\s\S]*?)```/g
+    let match: RegExpExecArray | null
+
+    while ((match = fenceRegex.exec(text)) !== null) {
+        const language = match[1]?.toLowerCase()
+        const labelFilename = match[2]?.trim()
+        const code = match[3]!.trimEnd()
+        const before = text.slice(Math.max(0, match.index - 300), match.index)
+        const inferredFilename = labelFilename ?? inferFilenameFromContext(before)
+        blocks.push({ filename: inferredFilename, language, code })
+    }
+
+    return blocks
+}
+
+function inferFilenameFromContext(before: string): string | undefined {
+    const patterns = [
+        /\*\*([^\s*]+\.[a-zA-Z]+)\*\*/,
+        /`([^\s`]+\.[a-zA-Z]+)`/,
+        /(?:file|path|update|edit|modify)[\s:]+([^\s]+\.[a-zA-Z]+)/i,
+        /##\s+([^\s]+\.[a-zA-Z]+)/,
+        /([^\s/]+\/[^\s]+\.[a-zA-Z]{1,5})\s*:?\s*$/m,
+    ]
+    for (const p of patterns) {
+        const m = before.match(p)
+        if (m?.[1]) return m[1]
+    }
+    return undefined
+}
+
+const LANG_EXT: Record<string, string[]> = {
+    typescript: ["ts", "tsx"],
+    javascript: ["js", "jsx", "mjs", "cjs"],
+    python:     ["py"],
+    json:       ["json"],
+    yaml:       ["yml", "yaml"],
+    toml:       ["toml"],
+    css:        ["css"],
+    html:       ["html", "htm"],
+    bash:       ["sh", "bash"],
+    rust:       ["rs"],
+    go:         ["go"],
+}
+
+function matchBlockToFile(blocks: CodeBlock[], targetFile: string): string | null {
+    const targetBase = basename(targetFile)
+    const targetExt  = extname(targetFile).replace(".", "").toLowerCase()
+
+    // Pass 1: exact filename match
+    for (const b of blocks) {
+        if (!b.filename) continue
+        if (
+            b.filename === targetFile ||
+            b.filename === targetBase ||
+            targetFile.endsWith(b.filename) ||
+            b.filename.endsWith(targetBase)
+        ) return b.code
+    }
+
+    // Pass 2: partial path segment match
+    for (const b of blocks) {
+        if (!b.filename) continue
+        const segments = targetFile.split("/")
+        if (segments.some(seg => seg.includes(".") && b.filename!.includes(seg))) {
+            return b.code
+        }
+    }
+
+    // Pass 3: language → extension match
+    for (const b of blocks) {
+        if (!b.language) continue
+        const exts = LANG_EXT[b.language] ?? [b.language]
+        if (exts.includes(targetExt)) return b.code
+    }
+
+    return null
 }
