@@ -8,6 +8,8 @@ import { fileURLToPath } from "url"
 
 const PROMPTS_DIR = join(fileURLToPath(import.meta.url), "../prompts")
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 export interface PlanStep {
     description: string
     targetFiles: string[]
@@ -21,10 +23,12 @@ export interface Plan {
     decompositionLevel: number
 }
 
+// ─── Entry point ──────────────────────────────────────────────────────────────
+
 export function plan(task: string, modelId: string): Effect.Effect<Plan, unknown> {
     return Effect.gen(function* () {
         const level = yield* Capability.detect(modelId)
-        const promptTemplate = yield* loadPrompt(`plan-level-${level}.txt`)
+        const promptTemplate = yield* loadPrompt(level)
         const filledPrompt = promptTemplate.replace("{TASK}", task)
 
         const response = yield* Effect.promise(() =>
@@ -34,31 +38,134 @@ export function plan(task: string, modelId: string): Effect.Effect<Plan, unknown
             })
         )
 
-        const steps = parseStepsFromResponse(response.text)
+        const steps = parseStepsFromResponse(response.text, task)
         return { steps, decompositionLevel: level }
     })
 }
 
-function loadPrompt(filename: string): Effect.Effect<string, unknown> {
+// ─── Prompt loader ────────────────────────────────────────────────────────────
+// Tries exact level file first, then falls back toward level-6 (most explicit).
+
+function loadPrompt(level: number): Effect.Effect<string, unknown> {
     return Effect.tryPromise(async () => {
-        try {
-            return await readFile(join(PROMPTS_DIR, filename), "utf-8")
-        } catch {
-            return readFile(join(PROMPTS_DIR, "plan-level-6.txt"), "utf-8")
+        const candidates = [
+            `plan-level-${level}.txt`,
+            // Nearest level that exists
+            ...Array.from({ length: 6 }, (_, i) => `plan-level-${6 - i}.txt`),
+        ]
+        for (const filename of candidates) {
+            try {
+                return await readFile(join(PROMPTS_DIR, filename), "utf-8")
+            } catch {}
         }
+        throw new Error("No plan prompt found")
     })
 }
 
-function parseStepsFromResponse(text: string): PlanStep[] {
-    try {
-        const jsonMatch = text.match(/```json\n([\s\S]*?)```/)
-        if (jsonMatch?.[1]) return JSON.parse(jsonMatch[1]) as PlanStep[]
-    } catch {}
+// ─── Response parser ──────────────────────────────────────────────────────────
+// Tries multiple strategies because LLMs output JSON in many formats.
+// Never returns an empty array — always produces at least one usable step.
+
+export function parseStepsFromResponse(text: string, fallbackTask?: string): PlanStep[] {
+    // Strategy 1: explicit ```json ... ``` fence
+    const jsonFence = text.match(/```json\s*\n([\s\S]*?)```/)
+    if (jsonFence?.[1]) {
+        const parsed = tryParseJson(jsonFence[1].trim())
+        if (parsed) return normalizeSteps(parsed)
+    }
+
+    // Strategy 2: any ``` ... ``` fence containing JSON
+    const anyFence = text.match(/```(?:\w+)?\s*\n([\s\S]*?)```/)
+    if (anyFence?.[1]?.trim().startsWith("[")) {
+        const parsed = tryParseJson(anyFence[1].trim())
+        if (parsed) return normalizeSteps(parsed)
+    }
+
+    // Strategy 3: bare JSON array anywhere in the text
+    const arrayMatch = text.match(/\[\s*\{[\s\S]*?\}\s*\]/)
+    if (arrayMatch?.[0]) {
+        const parsed = tryParseJson(arrayMatch[0])
+        if (parsed) return normalizeSteps(parsed)
+    }
+
+    // Strategy 4: entire text is JSON
+    const wholeParsed = tryParseJson(text.trim())
+    if (wholeParsed) return normalizeSteps(wholeParsed)
+
+    // Strategy 5: numbered list  "1. Do X to file.ts"
+    const listSteps = parseNumberedList(text)
+    if (listSteps.length > 0) return listSteps
+
+    // Fallback: single step from the whole response (never silently lose the task)
     return [{
-        description: text.trim(),
-        targetFiles: [],
+        description: (fallbackTask ?? text.trim()).slice(0, 300),
+        targetFiles: extractFilePaths(text),
         changeType: "modify",
         dependencies: [],
-        verificationCriteria: "Code compiles and tests pass",
+        verificationCriteria: "Code compiles and existing tests pass",
     }]
+}
+
+// ─── Parsing helpers ──────────────────────────────────────────────────────────
+
+function tryParseJson(text: string): unknown[] | null {
+    try {
+        const parsed = JSON.parse(text)
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return [parsed]
+    } catch {}
+    return null
+}
+
+function normalizeSteps(raw: unknown[]): PlanStep[] {
+    return raw
+        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+        .map((item, i): PlanStep => ({
+            description:         String(item["description"] ?? item["task"] ?? item["action"] ?? `Step ${i + 1}`),
+            targetFiles:         normalizeFileList(item["targetFiles"] ?? item["files"] ?? item["file"] ?? []),
+            changeType:          normalizeChangeType(item["changeType"] ?? item["type"] ?? "modify"),
+            dependencies:        Array.isArray(item["dependencies"]) ? (item["dependencies"] as number[]) : [],
+            verificationCriteria: String(item["verificationCriteria"] ?? item["verification"] ?? "Code compiles and tests pass"),
+        }))
+        .filter(s => s.description.length > 0)
+}
+
+function normalizeFileList(value: unknown): string[] {
+    if (Array.isArray(value)) return value.map(String).filter(Boolean)
+    if (typeof value === "string" && value.length > 0) return [value]
+    return []
+}
+
+function normalizeChangeType(value: unknown): "create" | "modify" | "delete" {
+    const v = String(value).toLowerCase()
+    if (v === "create" || v === "new" || v === "add") return "create"
+    if (v === "delete" || v === "remove") return "delete"
+    return "modify"
+}
+
+function parseNumberedList(text: string): PlanStep[] {
+    const lines = text.split("\n")
+    const steps: PlanStep[] = []
+    for (const line of lines) {
+        const m = line.match(/^\s*\d+[.)]\s+(.+)/)
+        if (m?.[1]) {
+            steps.push({
+                description: m[1].trim(),
+                targetFiles: extractFilePaths(m[1]),
+                changeType: "modify",
+                dependencies: steps.length > 0 ? [steps.length - 1] : [],
+                verificationCriteria: "Code compiles and tests pass",
+            })
+        }
+    }
+    return steps
+}
+
+function extractFilePaths(text: string): string[] {
+    const paths: string[] = []
+    const matches = text.matchAll(/(?:^|\s)([^\s`"']+\.(?:ts|tsx|js|jsx|py|go|rs|json|yaml|toml))(?:\s|$|[,)'":])/g)
+    for (const m of matches) {
+        if (m[1]) paths.push(m[1])
+    }
+    return [...new Set(paths)]
 }
