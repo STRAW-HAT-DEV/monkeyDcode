@@ -1,22 +1,29 @@
 import { Effect } from "effect"
 import type { ModelRef } from "@monkeydcode/llm"
-import { $ } from "bun"
+import { treeSitter } from "@monkeydcode/python-bridge"
 import * as Pipeline from "@monkeydcode/consistency/verification/pipeline"
 import * as PlanAgent from "../plan-agent.ts"
 import * as BuildAgent from "../build-agent.ts"
+import { assertCanWrite } from "../registry.ts"
 
 export function refactor(target: string, goal: string, model: ModelRef, modelId: string): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
+        assertCanWrite("refactor")
         const projectRoot = process.cwd()
 
-        // Step 1 — Snapshot existing test results before touching anything
+        // Step 1 — Parse AST structure before planning (plan/agents.md)
+        const ast = yield* Effect.tryPromise(() => treeSitter.parseAST(target))
+        const astSummary = JSON.stringify(ast).slice(0, 2000)
+
         const before = yield* Effect.promise(() =>
             Pipeline.run([target], projectRoot)
         )
 
-        // Step 2 — Plan the refactor (read-only understanding first)
         const plan = yield* PlanAgent.plan(
             `Refactor ${target} to achieve: ${goal}
+
+AST structure (tree-sitter):
+${astSummary}
 
 CRITICAL CONSTRAINTS:
 - Do NOT change observable behavior

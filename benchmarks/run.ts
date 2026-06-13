@@ -11,35 +11,44 @@
  * Results are written to benchmarks/results/<timestamp>.json
  */
 
-import { readdir, mkdir, rm, cp } from "fs/promises"
-import { existsSync } from "fs"
+import { readdir, mkdir, rm, cp, readFile } from "fs/promises"
 import { join } from "path"
-import { $ } from "bun"
-import { ollama } from "@monkeydcode/llm/providers/ollama"
-import { anthropic } from "@monkeydcode/llm/providers/anthropic"
-import * as Pipeline from "@monkeydcode/consistency/verification/pipeline"
-import { LLM } from "@monkeydcode/llm"
-import { applyChange } from "@monkeydcode/agent/build-agent"
-import { Effect } from "effect"
+import { tmpdir } from "os"
+import * as Pipeline from "../packages/consistency/src/verification/pipeline.ts"
 import { distance } from "fastest-levenshtein"
 
-// ─── Model registry ───────────────────────────────────────────────────────────
+async function runEffect<A>(program: import("effect").Effect.Effect<A, unknown, never>): Promise<A> {
+    const { Effect } = await import("effect")
+    return Effect.runPromise(program)
+}
 
-const ALL_MODELS = [
-    { id: "qwen2.5-coder:7b",  ref: ollama.model("qwen2.5-coder:7b"),  label: "Qwen 7B (local)",  provider: "ollama" },
-    { id: "qwen2.5-coder:14b", ref: ollama.model("qwen2.5-coder:14b"), label: "Qwen 14B (local)", provider: "ollama" },
-    { id: "qwen2.5-coder:32b", ref: ollama.model("qwen2.5-coder:32b"), label: "Qwen 32B (local)", provider: "ollama" },
-    { id: "claude-sonnet-4-6", ref: anthropic.model("claude-sonnet-4-6"), label: "Claude Sonnet", provider: "anthropic" },
-    { id: "claude-opus-4-8",   ref: anthropic.model("claude-opus-4-8"),   label: "Claude Opus",   provider: "anthropic" },
-]
+type ModelEntry = {
+    id: string
+    ref: { provider: string; id: string }
+    label: string
+    provider: string
+}
+
+async function loadModels(): Promise<ModelEntry[]> {
+    const { ollama } = await import("../packages/llm/src/providers/ollama.ts")
+    const { anthropic } = await import("../packages/llm/src/providers/anthropic.ts")
+    return [
+        { id: "qwen2.5-coder:7b",  ref: ollama.model("qwen2.5-coder:7b"),  label: "Qwen 7B (local)",  provider: "ollama" },
+        { id: "qwen2.5-coder:14b", ref: ollama.model("qwen2.5-coder:14b"), label: "Qwen 14B (local)", provider: "ollama" },
+        { id: "qwen2.5-coder:32b", ref: ollama.model("qwen2.5-coder:32b"), label: "Qwen 32B (local)", provider: "ollama" },
+        { id: "claude-sonnet-4-6", ref: anthropic.model("claude-sonnet-4-6"), label: "Claude Sonnet", provider: "anthropic" },
+        { id: "claude-opus-4-8",   ref: anthropic.model("claude-opus-4-8"),   label: "Claude Opus",   provider: "anthropic" },
+    ]
+}
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const TASKS_DIR   = join(import.meta.dir, "tasks")
 const RESULTS_DIR = join(import.meta.dir, "results")
-const WORK_DIR    = "/tmp/mdc-bench-work"
+const WORK_DIR    = join(tmpdir(), "mdc-bench-work")
 
 const CONSISTENCY_ENABLED = process.env.MDCODE_NO_CONSISTENCY !== "1"
+const VERIFY_ONLY = process.argv.includes("--verify-only")
 const TASK_FILTER  = process.argv.find((_, i) => process.argv[i - 1] === "--task")
 const MODEL_FILTER = process.argv.find((_, i) => process.argv[i - 1] === "--model")
 
@@ -67,15 +76,27 @@ async function main() {
         ? allTaskDirs.filter(t => t.startsWith(TASK_FILTER))
         : allTaskDirs
 
+    const ALL_MODELS = await loadModels()
+
     // Only test models that are reachable
     const models = await filterReachableModels(ALL_MODELS)
     const filteredModels = MODEL_FILTER
         ? models.filter(m => m.id.includes(MODEL_FILTER) || m.label.toLowerCase().includes(MODEL_FILTER))
         : models
 
-    if (filteredModels.length === 0) {
+    if (filteredModels.length === 0 && !VERIFY_ONLY) {
         console.error("No reachable models found. Make sure Ollama is running or ANTHROPIC_API_KEY is set.")
+        console.error("Tip: run with --verify-only to test expected solutions without LLM.")
         process.exit(1)
+    }
+
+    if (VERIFY_ONLY) {
+        console.log("\n🔬 Verify-only mode (no LLM — tests expected/ solutions)\n")
+        const verifyResults = await runVerifyOnly(taskDirs)
+        await saveResults(verifyResults)
+        printSummary(verifyResults)
+        await generateReport(verifyResults)
+        return
     }
 
     console.log(`\n🏴‍☠️  monkeyDcode Benchmark`)
@@ -144,6 +165,34 @@ async function main() {
 
     await saveResults(results)
     printSummary(results)
+    await generateReport(results)
+    checkSuccessCriteria(results)
+}
+
+/** Verify expected solutions pass pipeline — no LLM required. */
+async function runVerifyOnly(taskDirs: string[]): Promise<BenchmarkResult[]> {
+    const results: BenchmarkResult[] = []
+    for (const taskDir of taskDirs) {
+        const taskPath = join(TASKS_DIR, taskDir)
+        const start = Date.now()
+        await rm(WORK_DIR, { recursive: true, force: true })
+        await cp(join(taskPath, "starter"), WORK_DIR, { recursive: true })
+        await cp(join(taskPath, "expected"), WORK_DIR, { recursive: true })
+        const srcFiles = await collectSourceFiles(WORK_DIR)
+        const verification = await Pipeline.run(srcFiles, WORK_DIR)
+        results.push({
+            model:             "verify-only",
+            modelLabel:        "Expected solutions",
+            task:              taskDir,
+            passed:            verification.passed,
+            verificationScore: verification.score,
+            durationMs:        Date.now() - start,
+            outputCode:        "",
+            consistencyMode:   "on",
+        })
+        console.log(`  ${taskDir}: ${verification.passed ? "✅" : "❌"}`)
+    }
+    return results
 }
 
 // ─── Agent runners ────────────────────────────────────────────────────────────
@@ -151,44 +200,57 @@ async function main() {
 async function runWithConsistency(
     task: string,
     workDir: string,
-    model: ReturnType<typeof ollama.model>,
+    model: ModelEntry["ref"],
     modelId: string,
 ): Promise<string> {
-    const { sample } = await import("@monkeydcode/consistency/sampler")
-    const srcFiles = await collectSourceFiles(workDir)
-
-    const prompt = buildPrompt(task, srcFiles, workDir)
-    const result = await Effect.runPromise(
-        sample({ prompt, files: srcFiles, model, modelId })
-    )
-
-    await Effect.runPromise(applyChange(result.selected.change, srcFiles))
-    return result.selected.change
+    const { handle: orchestrate } = await import("../packages/agent/src/orchestrator.ts")
+    const orig = process.cwd()
+    try {
+        process.chdir(workDir)
+        await runEffect(orchestrate(task, model, modelId))
+        return await readGeneratedCode(workDir)
+    } finally {
+        process.chdir(orig)
+    }
 }
 
 async function runBaseline(
     task: string,
     workDir: string,
-    model: ReturnType<typeof ollama.model>,
+    model: ModelEntry["ref"],
 ): Promise<string> {
+    const { LLM } = await import("../packages/llm/src/llm.ts")
+    const { applyChange } = await import("../packages/agent/src/build-agent.ts")
     const srcFiles = await collectSourceFiles(workDir)
-    const prompt = buildPrompt(task, srcFiles, workDir)
+    const prompt = await buildPrompt(task, srcFiles, workDir)
 
     const response = await LLM.generateAsync({
         model,
         messages: [{ role: "user", content: prompt }],
     })
 
-    await Effect.runPromise(applyChange(response.text, srcFiles))
+    await runEffect(applyChange(response.text, srcFiles))
     return response.text
 }
 
-function buildPrompt(task: string, files: string[], workDir: string): string {
-    const fileContents = files.map(f => {
-        try { return `// ${f.replace(workDir, "")}\n${Bun.file(f).toString()}` } catch { return "" }
-    }).filter(Boolean).join("\n\n")
+async function readGeneratedCode(workDir: string): Promise<string> {
+    const files = await collectSourceFiles(workDir)
+    const parts: string[] = []
+    for (const f of files) {
+        parts.push(await readFile(f, "utf-8"))
+    }
+    return parts.join("\n")
+}
 
-    return `${fileContents}
+async function buildPrompt(task: string, files: string[], workDir: string): Promise<string> {
+    const fileContents = await Promise.all(files.map(async f => {
+        try {
+            const text = await readFile(f, "utf-8")
+            return `// ${f.replace(workDir, "")}\n${text}`
+        } catch { return "" }
+    }))
+
+    return `${fileContents.filter(Boolean).join("\n\n")}
 
 ## Task
 ${task}
@@ -214,8 +276,8 @@ async function collectSourceFiles(dir: string): Promise<string[]> {
     return files
 }
 
-async function filterReachableModels(models: typeof ALL_MODELS) {
-    const reachable: typeof ALL_MODELS = []
+async function filterReachableModels(models: ModelEntry[]) {
+    const reachable: ModelEntry[] = []
     for (const m of models) {
         if (m.provider === "ollama") {
             try {
@@ -312,6 +374,49 @@ function computePairwiseConsistency(results: BenchmarkResult[]): Record<string, 
             .filter(([, v]) => v.count > 0)
             .map(([k, v]) => [k, v.sum / v.count])
     )
+}
+
+async function generateReport(results: BenchmarkResult[]) {
+    const models = [...new Set(results.map(r => r.model))]
+    const lines = [
+        "# monkeyDcode Benchmark Results",
+        "",
+        `Generated: ${new Date().toISOString()}`,
+        `Consistency engine: ${CONSISTENCY_ENABLED ? "ON" : "OFF"}`,
+        "",
+        "## Pass Rates",
+        "",
+        "| Model | Pass Rate | Avg Score |",
+        "|-------|-----------|-----------|",
+    ]
+
+    for (const model of models) {
+        const mr = results.filter(r => r.model === model)
+        const passed = mr.filter(r => r.passed).length
+        const pct = ((passed / mr.length) * 100).toFixed(0)
+        const avg = (mr.reduce((s, r) => s + r.verificationScore, 0) / mr.length * 100).toFixed(0)
+        lines.push(`| ${mr[0]?.modelLabel ?? model} | ${pct}% | ${avg}% |`)
+    }
+
+    lines.push("", "## Pairwise Consistency", "")
+    const pairs = computePairwiseConsistency(results)
+    for (const [pair, sim] of Object.entries(pairs)) {
+        lines.push(`- ${pair}: ${(sim * 100).toFixed(1)}%`)
+    }
+
+    const reportPath = join(RESULTS_DIR, "report.md")
+    await Bun.write(reportPath, lines.join("\n"))
+    console.log(`📄 Report: ${reportPath}`)
+}
+
+function checkSuccessCriteria(results: BenchmarkResult[]) {
+    const qwen7 = results.filter(r => r.model.includes("7b"))
+    if (qwen7.length === 0) return
+
+    const passRate = qwen7.filter(r => r.passed).length / qwen7.length
+    console.log(`\n🎯 Qwen 7B pass rate: ${(passRate * 100).toFixed(0)}% (target: ≥70%)`)
+    if (passRate >= 0.7) console.log("   ✅ Meets weak-model target")
+    else console.log("   ⚠️  Below weak-model target")
 }
 
 main().catch(console.error)

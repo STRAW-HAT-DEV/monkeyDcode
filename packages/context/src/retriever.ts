@@ -1,35 +1,42 @@
 import { Effect } from "effect"
+import { readFile } from "fs/promises"
+import { join } from "path"
 import * as SignatureIndex from "./signature-index.ts"
 import * as VectorStore from "./vector_store.ts"
 import { call } from "@monkeydcode/python-bridge/bridge"
-
-// ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface AssembledContext {
     signatures: SignatureIndex.Signature[]
     relatedExamples: string[]
     graphNeighbors: string[]
+    workingMemory: {
+        currentGoal: string
+        completedSteps: { index: number; confidence: number; timestamp: string }[]
+        knownConstraints: string[]
+    }
 }
 
-/**
- * capabilityLevel: 1 = frontier (Claude Opus, GPT-5), 6 = weakest local model.
- * Weak models get LESS context — they get confused by large inputs.
- * Strong models get MORE context — they can reason over broad signals.
- */
 export interface RetrieveOptions {
     capabilityLevel?: number
 }
-
-// ─── Context size limits by capability level ──────────────────────────────────
 
 const maxSignatures = (level: number) => level <= 2 ? 20 : level <= 4 ? 10 : 5
 const maxExamples   = (level: number) => level <= 2 ? 5  : level <= 4 ? 3  : 2
 const graphDepth    = (level: number) => level <= 3 ? 2  : 1
 const maxNeighbors  = (level: number) => level <= 2 ? 20 : 10
 
-// ─── Retrieve ─────────────────────────────────────────────────────────────────
-// All bridge calls fail gracefully — if Python bridge is down, we return empty
-// arrays and continue. The agent works with less context rather than crashing.
+async function loadWorkingMemory() {
+    try {
+        const raw = await readFile(join(process.cwd(), ".monkeydcode", "working-memory.json"), "utf-8")
+        return JSON.parse(raw) as {
+            currentGoal: string
+            completedSteps: { index: number; confidence: number; timestamp: string }[]
+            knownConstraints: string[]
+        }
+    } catch {
+        return { currentGoal: "", completedSteps: [], knownConstraints: [] }
+    }
+}
 
 export function retrieve(
     query: { files: string[]; description: string },
@@ -38,37 +45,40 @@ export function retrieve(
     const level = options.capabilityLevel ?? 3
 
     return Effect.tryPromise(async () => {
-        // ── Signatures from tree-sitter ──────────────────────────────────────
         const sigArrays = await Promise.all(
             query.files.map(f =>
                 Effect.runPromise(SignatureIndex.extractSignatures(f)).catch(
-                    () => [] as SignatureIndex.Signature[]
-                )
-            )
+                    () => [] as SignatureIndex.Signature[],
+                ),
+            ),
         )
         const signatures = sigArrays.flat().slice(0, maxSignatures(level))
 
-        // ── Semantic examples from vector store ──────────────────────────────
         const examples = await Effect.runPromise(
-            VectorStore.search(query.description, maxExamples(level))
+            VectorStore.search(query.description, maxExamples(level)),
         ).catch(() => [] as { text: string; score: number }[])
 
-        // ── Knowledge graph neighbors ─────────────────────────────────────────
         const depth = graphDepth(level)
         const neighborArrays = await Promise.all(
             query.files.map(f =>
-                call<string[]>("knowledgeGraph.neighbors", { node: f, depth }).catch(
-                    () => [] as string[]
-                )
-            )
+                call<string[]>("knowledgeGraph.neighbors", { node: f, depth }).catch(() => []),
+            ),
         )
         const graphNeighbors = neighborArrays.flat().slice(0, maxNeighbors(level))
+        const wm = await loadWorkingMemory()
 
-        return { signatures, relatedExamples: examples.map(e => e.text), graphNeighbors }
+        return {
+            signatures,
+            relatedExamples: examples.map(e => e.text),
+            graphNeighbors,
+            workingMemory: {
+                currentGoal: wm.currentGoal,
+                completedSteps: wm.completedSteps,
+                knownConstraints: wm.knownConstraints,
+            },
+        }
     })
 }
-
-// ─── Format for LLM prompt ────────────────────────────────────────────────────
 
 export function formatForPrompt(ctx: AssembledContext): string {
     const parts: string[] = []
@@ -78,21 +88,30 @@ export function formatForPrompt(ctx: AssembledContext): string {
             "## Available Functions/Methods\n" +
             ctx.signatures
                 .map(s => `- ${s.name}${s.parameters} (${s.file}:${s.line})`)
-                .join("\n")
+                .join("\n"),
         )
     }
 
     if (ctx.relatedExamples.length > 0) {
         parts.push(
             "## Related Code Examples\n" +
-            ctx.relatedExamples.join("\n---\n")
+            ctx.relatedExamples.join("\n---\n"),
         )
     }
 
     if (ctx.graphNeighbors.length > 0) {
         parts.push(
             "## Related Files (dependency graph)\n" +
-            ctx.graphNeighbors.join("\n")
+            ctx.graphNeighbors.join("\n"),
+        )
+    }
+
+    if (ctx.workingMemory.currentGoal || ctx.workingMemory.completedSteps.length > 0) {
+        parts.push(
+            "## Working Memory\n" +
+            `Goal: ${ctx.workingMemory.currentGoal}\n` +
+            `Completed: ${ctx.workingMemory.completedSteps.length} steps\n` +
+            `Constraints: ${ctx.workingMemory.knownConstraints.join("; ") || "none"}`,
         )
     }
 

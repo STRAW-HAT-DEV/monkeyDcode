@@ -8,15 +8,19 @@
         "dev": "bun run --filter @monkeydcode/tui dev",
         "build": "bun run --filter '*' build",
         "typecheck": "bun run --filter '*' typecheck",
-        "test": "bun run --filter '*' test",
+        "test": "bun test packages",
         "lint": "biome check .",
         "bench": "bun run benchmarks/run.ts",
         "bench:baseline": "MDCODE_NO_CONSISTENCY=1 bun run benchmarks/run.ts",
         "bench:task": "bun run benchmarks/run.ts --task",
-        "bench:model": "bun run benchmarks/run.ts --model"
+        "bench:model": "bun run benchmarks/run.ts --model",
+        "bench:verify-only": "bun run benchmarks/run.ts --verify-only",
+        "bench:compare": "bun run benchmarks/compare.ts"
     },
     "devDependencies": {
         "@types/bun": "latest",
-        "typescript": "^5.8.0"
+        "typescript": "^5.8.0",
+        "effect": "4.0.0-beta.66",
+        "fastest-levenshtein": "^1.0.16"
     }
 }

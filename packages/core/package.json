@@ -36,7 +36,8 @@
         "./agent": "./src/agent.ts",
         "./aisdk": "./src/aisdk.ts",
         "./git": "./src/git.ts",
-        "./v2-schema": "./src/v2-schema.ts"
+        "./v2-schema": "./src/v2-schema.ts",
+        "./mdc-config": "./src/mdc-config.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

@@ -8,7 +8,11 @@
         ".": "./src/index.ts",
         "./build-agent": "./src/build-agent.ts",
         "./plan-agent": "./src/plan-agent.ts",
-        "./orchestrator": "./src/orchestrator.ts"
+        "./orchestrator": "./src/orchestrator.ts",
+        "./registry": "./src/registry.ts",
+        "./react": "./src/react.ts",
+        "./status": "./src/status.ts",
+        "./working-memory": "./src/working-memory.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
@@ -17,7 +21,9 @@
     "dependencies": {
         "@monkeydcode/consistency": "workspace:*",
         "@monkeydcode/context": "workspace:*",
+        "@monkeydcode/python-bridge": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
+        "@monkeydcode/hashline": "workspace:*",
         "@monkeydcode/llm": "workspace:*",
         "effect": "4.0.0-beta.66"
     }

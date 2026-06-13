@@ -24,11 +24,11 @@ originals in `finally`. Verification runs sequentially to avoid concurrent file 
 
 ---
 
-## 3. Sub-agents have never run against real code
+## 3. Sub-agents need more battle testing
 
 **Files:** `packages/agent/src/sub-agents/bugfix.ts`, `feature.ts`, `refactor.ts`, `debug.ts`
 
-Zoro, Nami, Usopp, Sanji, Robin — all solid architecture, zero battle testing. Unknown failure modes.
+Sub-agents are now wired through the TUI orchestrator. Run real tasks and benchmarks to validate edge cases.
 
 ---
 
@@ -36,12 +36,7 @@ Zoro, Nami, Usopp, Sanji, Robin — all solid architecture, zero battle testing.
 
 **Files:** `packages/python-bridge/src/bridge.ts`, `packages/context/src/signature-index.ts`
 
-The bridge spawns the Python server and connects via Unix socket — but:
-- tree-sitter signature extraction flows through the bridge but has never been tested end-to-end
-- Knowledge graph neighbors (`knowledgeGraph.neighbors`) is a call to a Python handler that may or may not be registered in `bridge_server.py`
-- Vector store indexing and search depends on the bridge being alive, which is not guaranteed
-
-Until the bridge is fully tested, context retrieval (Chopper) returns empty or fails silently.
+Bridge now supports TCP on Windows and Unix sockets on Linux/macOS. Regex fallback when bridge unavailable. E2E tests in `packages/python-bridge/test/roundtrips.test.ts`.
 
 ---
 

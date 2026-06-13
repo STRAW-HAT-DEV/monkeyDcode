@@ -1,12 +1,23 @@
 import { Effect } from "effect"
-import { writeFile } from "fs/promises"
+import { readFile, writeFile } from "fs/promises"
 import { basename, extname } from "path"
 import * as Sampler from "@monkeydcode/consistency/sampler"
 import * as Retriever from "@monkeydcode/context/retriever"
 import * as Capability from "@monkeydcode/consistency/model-capability/detector"
+import { recordPassRate } from "@monkeydcode/consistency/model-capability/detector"
+import {
+    applyPatch,
+    globalSnapshotStore,
+    HASHLINE_EDIT_PROMPT,
+    looksLikeHashlinePatch,
+} from "@monkeydcode/hashline"
+import { syntaxGateForFile } from "@monkeydcode/consistency/verification/syntax"
 import type { Plan, PlanStep } from "./plan-agent.ts"
 import { resolveModel } from "./utils.ts"
 import * as WorkingMemory from "./working-memory.ts"
+import * as Status from "./status.ts"
+import { assertCanWrite } from "./registry.ts"
+import { wrapReAct } from "./react.ts"
 
 export type { Plan, PlanStep }
 
@@ -25,6 +36,12 @@ export function executePlan(plan: Plan, modelId: string): Effect.Effect<void, un
     return Effect.gen(function* () {
         for (let i = 0; i < plan.steps.length; i++) {
             const step = plan.steps[i]!
+            Status.emit({
+                agent: "franky",
+                action: `Step ${i + 1}/${plan.steps.length}: ${step.description}`,
+                plan,
+                progress: { current: i + 1, total: plan.steps.length },
+            })
             yield* executeStep(step, modelId, i)
         }
     })
@@ -32,6 +49,7 @@ export function executePlan(plan: Plan, modelId: string): Effect.Effect<void, un
 
 function executeStep(step: PlanStep, modelId: string, index: number): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
+        assertCanWrite("build")
         const capabilityLevel = yield* Capability.detect(modelId)
 
         const context = yield* Retriever.retrieve(
@@ -39,7 +57,7 @@ function executeStep(step: PlanStep, modelId: string, index: number): Effect.Eff
             { capabilityLevel },
         )
 
-        const prompt = buildExecutionPrompt(step, context)
+        const prompt = wrapReAct(buildExecutionPrompt(step, context))
         const model = resolveModel(modelId)
 
         const result = yield* Sampler.sample({
@@ -50,10 +68,9 @@ function executeStep(step: PlanStep, modelId: string, index: number): Effect.Eff
         })
 
         yield* applyChange(result.selected.change, step.targetFiles)
+        yield* Effect.tryPromise(() => recordPassRate(modelId, result.selected.verification.passed))
 
-        yield* WorkingMemory.update({
-            completedSteps: [{ index, confidence: result.confidence, timestamp: new Date().toISOString() }],
-        })
+        yield* WorkingMemory.appendStep({ index, confidence: result.confidence })
     })
 }
 
@@ -73,23 +90,30 @@ ${fileList}
 ${step.verificationCriteria}
 
 ## Output Format — CRITICAL
-For EACH file you modify, output a separate code block with the filename as the label:
+${HASHLINE_EDIT_PROMPT}
 
-\`\`\`typescript:path/to/file.ts
-// complete file contents here
-\`\`\`
+For EXISTING files: output hashline patches in \`\`\`hashline fences (NOT full-file rewrites).
+For NEW files only: use \`\`\`typescript:path/to/file.ts with complete contents.
 
-Rules:
-- Output the COMPLETE file contents, not just the changed lines
-- Use the exact file path from Target Files as the label
-- One code block per file
-- Never output partial files or diffs`
+Target file paths (use in [path#TAG] after read):
+${fileList}`
 }
 
 // ─── applyChange ─────────────────────────────────────────────────────────────
 
 export function applyChange(change: string, targetFiles: string[]): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
+        const hashlinePatches = extractHashlinePatches(change)
+        if (hashlinePatches.length > 0) {
+            yield* applyHashlinePatches(hashlinePatches, targetFiles)
+            return
+        }
+
+        if (looksLikeHashlinePatch(change)) {
+            yield* applyHashlinePatches([change.trim()], targetFiles)
+            return
+        }
+
         const blocks = extractCodeBlocks(change)
 
         if (blocks.length === 0) {
@@ -121,6 +145,67 @@ export function applyChange(change: string, targetFiles: string[]): Effect.Effec
         // Fallback: if exactly one block remains unassigned and one file unmatched, pair them
         if (unmatched.length === 1 && blocks.length === 1) {
             yield* Effect.tryPromise(() => writeFile(unmatched[0]!, blocks[0]!.code))
+        }
+    })
+}
+
+function extractHashlinePatches(text: string): string[] {
+    const patches: string[] = []
+    const fenceRegex = /```hashline\n([\s\S]*?)```/g
+    let match: RegExpExecArray | null
+    while ((match = fenceRegex.exec(text)) !== null) {
+        patches.push(match[1]!.trim())
+    }
+    return patches
+}
+
+function resolvePatchPath(patch: string, targetFiles: string[]): string | undefined {
+    const header = /^\[([^\]#]+)#[0-9a-fA-F]{4}\]/m.exec(patch)
+    if (!header) return targetFiles[0]
+    const patchPath = header[1]!.trim()
+    for (const target of targetFiles) {
+        if (
+            target === patchPath ||
+            target.endsWith(patchPath) ||
+            patchPath.endsWith(target) ||
+            basename(target) === basename(patchPath)
+        ) {
+            return target
+        }
+    }
+    return targetFiles[0]
+}
+
+function applyHashlinePatches(patches: string[], targetFiles: string[]): Effect.Effect<void, unknown> {
+    return Effect.gen(function* () {
+        for (const patch of patches) {
+            const targetFile = resolvePatchPath(patch, targetFiles)
+            if (!targetFile) continue
+
+            const existing = yield* Effect.tryPromise(() => readFile(targetFile, "utf-8"))
+            const relPath = targetFile.replace(/\\/g, "/")
+            globalSnapshotStore.record(relPath, existing)
+            const result = yield* Effect.tryPromise(() =>
+                applyPatch(
+                    patch,
+                    {
+                        content: existing,
+                        path: relPath,
+                        verifyBeforeWrite: syntaxGateForFile(targetFile),
+                    },
+                    globalSnapshotStore,
+                ),
+            )
+
+            if (!result.ok || result.content === undefined) {
+                return yield* Effect.fail(
+                    new Error(
+                        `Hashline apply failed for ${targetFile}: ${result.error ?? "unknown"}${result.hint ? `\n${result.hint}` : ""}`,
+                    ),
+                )
+            }
+
+            yield* Effect.tryPromise(() => writeFile(targetFile, result.content!, "utf-8"))
         }
     })
 }

@@ -12,7 +12,8 @@
         "./schema": "./src/schema.ts",
         "./error": "./src/error.ts",
         "./protocol": "./src/protocol.ts",
-        "./protocols/*": "./src/protocols/*.ts"
+        "./protocols/*": "./src/protocols/*.ts",
+        "./ollama-health": "./src/ollama-health.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

@@ -1,7 +1,9 @@
-You are a planning agent. Break the task into clear, focused implementation steps.
+You are a planning agent for a medium-sized model. Break the task into 4–5 small steps.
 
-Each step should modify 1-3 files and do one focused thing.
-Order steps so dependencies are satisfied before they are needed.
+Each step must:
+- Modify at most ~30 lines of code
+- Touch exactly 1–2 files
+- Do ONE thing only
 
 ## Task
 
@@ -12,11 +14,11 @@ Order steps so dependencies are satisfied before they are needed.
 ```json
 [
   {
-    "description": "what to do and in which file",
-    "targetFiles": ["path/to/file.ts"],
-    "changeType": "create" | "modify" | "delete",
+    "description": "Add X to file.ts",
+    "targetFiles": ["src/file.ts"],
+    "changeType": "modify",
     "dependencies": [],
-    "verificationCriteria": "how to verify this step worked"
+    "verificationCriteria": "File compiles"
   }
 ]
 ```

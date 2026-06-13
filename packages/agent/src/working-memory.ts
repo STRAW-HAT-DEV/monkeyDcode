@@ -31,6 +31,35 @@ export function save(state: State) {
 export function update(patch: Partial<State>) {
     return Effect.gen(function* () {
         const current = yield* load()
-        yield* save({ ...current, ...patch })
+        const merged: State = { ...current, ...patch }
+        if (patch.completedSteps) {
+            const existing = current.completedSteps.filter(
+                s => !patch.completedSteps!.some(n => n.index === s.index),
+            )
+            merged.completedSteps = [...existing, ...patch.completedSteps]
+        }
+        if (patch.errorHistory) {
+            merged.errorHistory = [...current.errorHistory, ...patch.errorHistory]
+        }
+        if (patch.knownConstraints) {
+            merged.knownConstraints = [
+                ...new Set([...current.knownConstraints, ...patch.knownConstraints]),
+            ]
+        }
+        yield* save(merged)
     })
+}
+
+export function appendStep(step: { index: number; confidence: number }) {
+    return update({
+        completedSteps: [{
+            index: step.index,
+            confidence: step.confidence,
+            timestamp: new Date().toISOString(),
+        }],
+    })
+}
+
+export function setGoal(goal: string) {
+    return update({ currentGoal: goal })
 }

@@ -88,3 +88,20 @@ test("Python syntax check fails on invalid file", async () => {
     expect(r.passed).toBe(false)
     expect(r.stage).toBe("syntax")
 })
+
+test("checkContent validates in-memory TypeScript", async () => {
+    const { checkContent, syntaxGateForFile } = await import("../src/verification/syntax.ts")
+    const f = join(TMP, "mem.ts")
+
+    const ok = await checkContent(f, "export const ok = 1\n")
+    expect(ok.passed).toBe(true)
+
+    const bad = await checkContent(f, "export const x = {\n")
+    expect(bad.passed).toBe(false)
+
+    const gate = syntaxGateForFile(f)
+    expect((await gate("export const y = 2\n")).ok).toBe(true)
+    const blocked = await gate("export const z = {\n")
+    expect(blocked.ok).toBe(false)
+    expect(blocked.message).toContain("Syntax check failed")
+})

@@ -5,6 +5,7 @@ import { readFile } from "fs/promises"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { $ } from "bun"
+import * as Status from "./status.ts"
 
 const PROMPTS = join(fileURLToPath(import.meta.url), "../prompts")
 
@@ -15,6 +16,13 @@ export interface ReviewIssue {
     line: number
     message: string
     suggestion?: string
+}
+
+export interface ReviewResult {
+    issues: ReviewIssue[]
+    actorIssueCount: number
+    criticAdditions: number
+    rounds: 3
 }
 
 async function getDiff(): Promise<string> {
@@ -31,9 +39,11 @@ function parseIssues(text: string): ReviewIssue[] {
     return []
 }
 
+/** Actor-Critique review: 3 rounds per plan/agents.md */
 export function review(model: ModelRef): Effect.Effect<ReviewIssue[], unknown> {
     return Effect.gen(function* () {
         const diff = yield* Effect.tryPromise(() => getDiff())
+        Status.emit({ agent: "robin", action: "Review Round 1/3 — Actor scanning diff...", diff })
 
         const [actorTpl, criticTpl, consensusTpl] = yield* Effect.all([
             Effect.tryPromise(() => readFile(join(PROMPTS, "review-actor.txt"), "utf-8")),
@@ -52,6 +62,11 @@ export function review(model: ModelRef): Effect.Effect<ReviewIssue[], unknown> {
             })
         )
         const actorIssues = parseIssues(actorResponse.text)
+        Status.emit({
+            agent: "robin",
+            action: `Review Round 2/3 — Critic challenging ${actorIssues.length} actor finding(s)...`,
+            diff,
+        })
 
         // Round 2 — Critic
         const criticResponse = yield* Effect.promise(() =>
@@ -65,6 +80,12 @@ export function review(model: ModelRef): Effect.Effect<ReviewIssue[], unknown> {
                 }],
             })
         )
+        const criticIssues = parseIssues(criticResponse.text)
+        Status.emit({
+            agent: "robin",
+            action: `Review Round 3/3 — Consensus on ${actorIssues.length + criticIssues.length} issue(s)...`,
+            diff,
+        })
 
         // Round 3 — Consensus
         const consensusResponse = yield* Effect.promise(() =>
@@ -75,11 +96,20 @@ export function review(model: ModelRef): Effect.Effect<ReviewIssue[], unknown> {
                     content: consensusTpl!
                         .replace("{DIFF}", diff)
                         .replace("{ACTOR}", JSON.stringify(actorIssues, null, 2))
-                        .replace("{CRITIC}", criticResponse.text),
+                        .replace("{CRITIC}", JSON.stringify(criticIssues, null, 2)),
                 }],
             })
         )
 
-        return parseIssues(consensusResponse.text)
+        const finalIssues = parseIssues(consensusResponse.text)
+        Status.emit({
+            agent: "robin",
+            action: finalIssues.length > 0
+                ? `Review complete — ${finalIssues.length} actionable issue(s)`
+                : "Review complete — no issues found",
+            diff,
+        })
+
+        return finalIssues
     })
 }

@@ -1,57 +1,84 @@
-import { spawn } from "child_process"
+import { spawn, type ChildProcess } from "child_process"
 import { Socket } from "net"
 import { join } from "path"
 import { fileURLToPath } from "url"
+import { tmpdir } from "os"
+import { unlinkSync, existsSync } from "fs"
 
 const TOOLS_DIR = join(fileURLToPath(import.meta.url), "../../../../tools")
-const SOCKET_PATH = `/tmp/mdc-bridge-${process.pid}.sock`
-const READY_TIMEOUT_MS = 8000  // weak machines may need longer to import tree-sitter
+const READY_TIMEOUT_MS = 15_000
 
 interface BridgeState {
     socket: Socket
     pending: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>
     nextId: number
     buf: string
+    process: ChildProcess
 }
 
 let _state: BridgeState | null = null
 let _connecting: Promise<BridgeState> | null = null
 
+function socketEndpoint(): { kind: "unix"; path: string } | { kind: "tcp"; host: string; port: number } {
+    if (process.platform === "win32") {
+        return { kind: "tcp", host: "127.0.0.1", port: 0 }
+    }
+    return { kind: "unix", path: join(tmpdir(), `mdc-bridge-${process.pid}.sock`) }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error("Bridge connection timeout")), ms),
+        ),
+    ])
+}
+
 async function getState(): Promise<BridgeState> {
     if (_state) return _state
-    // Prevent concurrent connect attempts
     if (_connecting) return _connecting
-    _connecting = connect().finally(() => { _connecting = null })
+    _connecting = withTimeout(connect(), 8_000).finally(() => { _connecting = null })
     return _connecting
 }
 
 async function connect(): Promise<BridgeState> {
+    const endpoint = socketEndpoint()
+    const arg = endpoint.kind === "unix"
+        ? endpoint.path
+        : "tcp://0"
+
     const proc = spawn("uv", [
-        "run", "python3",
+        "run", "python",
         join(TOOLS_DIR, "src", "bridge_server.py"),
-        SOCKET_PATH,
+        arg,
     ], {
         stdio: ["ignore", "pipe", "pipe"],
         cwd: TOOLS_DIR,
+        shell: process.platform === "win32",
     })
 
     proc.stderr?.on("data", (d: Buffer) => {
-        // Surface Python-side warnings/errors during development
         process.stderr.write(`[bridge] ${d.toString()}`)
     })
 
-    // Wait for "ready\n" on stdout, or timeout
-    await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-            // Timeout is not fatal — server may still be starting; try to connect anyway
-            resolve()
-        }, READY_TIMEOUT_MS)
+    let connectTarget: { host: string; port: number } | { path: string } =
+        endpoint.kind === "unix" ? { path: endpoint.path } : { host: "127.0.0.1", port: 0 }
 
+    await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(), READY_TIMEOUT_MS)
         let buf = ""
+
         proc.stdout?.on("data", (d: Buffer) => {
             buf += d.toString()
             if (buf.includes("ready")) {
                 clearTimeout(timer)
+                if (endpoint.kind === "tcp") {
+                    const m = buf.match(/ready tcp:\/\/([\d.]+):(\d+)/)
+                    if (m) {
+                        connectTarget = { host: m[1]!, port: Number(m[2]) }
+                    }
+                }
                 resolve()
             }
         })
@@ -71,11 +98,21 @@ async function connect(): Promise<BridgeState> {
 
     const socket = new Socket()
     await new Promise<void>((resolve, reject) => {
-        socket.connect(SOCKET_PATH, resolve)
+        if ("port" in connectTarget!) {
+            socket.connect(connectTarget.port, connectTarget.host, resolve)
+        } else {
+            socket.connect(connectTarget!.path, resolve)
+        }
         socket.once("error", reject)
     })
 
-    const s: BridgeState = { socket, pending: new Map(), nextId: 1, buf: "" }
+    const s: BridgeState = {
+        socket,
+        pending: new Map(),
+        nextId: 1,
+        buf: "",
+        process: proc,
+    }
 
     socket.on("data", (chunk: Buffer) => {
         s.buf += chunk.toString()
@@ -95,7 +132,7 @@ async function connect(): Promise<BridgeState> {
                     if (resp.error) p.reject(new Error(resp.error.message))
                     else p.resolve(resp.result)
                 }
-            } catch {}
+            } catch { /* ignore malformed */ }
         }
     })
 
@@ -118,7 +155,6 @@ export async function call<T>(method: string, params?: unknown): Promise<T> {
     })
 }
 
-/** Ping the bridge — returns true if alive, false if not reachable */
 export async function ping(): Promise<boolean> {
     try {
         const result = await call<string>("ping")
@@ -129,5 +165,13 @@ export async function ping(): Promise<boolean> {
 }
 
 export function shutdown() {
-    if (_state) { _state.socket.destroy(); _state = null }
+    if (_state) {
+        _state.socket.destroy()
+        try { _state.process.kill() } catch { /* ignore */ }
+        _state = null
+    }
+}
+
+export function isBridgeAvailable(): boolean {
+    return _state !== null
 }

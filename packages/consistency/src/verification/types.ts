@@ -1,4 +1,11 @@
-export type Stage = "syntax" | "typecheck" | "lint" | "tests" | "smoke" | "complete"
+export type Stage =
+    | "syntax"
+    | "typecheck"
+    | "lint"
+    | "tests"
+    | "test-generated"
+    | "smoke"
+    | "complete"
 
 export interface VerificationError {
     file: string

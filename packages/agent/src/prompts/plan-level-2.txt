@@ -1,22 +1,24 @@
-You are a planning agent. Break the task into clear, focused implementation steps.
+You are a planning agent for a strong model. Decompose the task into 2–3 high-level steps.
 
-Each step should modify 1-3 files and do one focused thing.
-Order steps so dependencies are satisfied before they are needed.
+Each step should:
+- Modify at most ~100 lines of code
+- Touch 1–3 related files
+- Be independently verifiable
 
 ## Task
 
 {TASK}
 
-## Output — JSON array only, no other text
+## Output — JSON array only
 
 ```json
 [
   {
-    "description": "what to do and in which file",
+    "description": "what to do",
     "targetFiles": ["path/to/file.ts"],
     "changeType": "create" | "modify" | "delete",
     "dependencies": [],
-    "verificationCriteria": "how to verify this step worked"
+    "verificationCriteria": "how to verify"
   }
 ]
 ```

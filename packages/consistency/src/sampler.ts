@@ -7,7 +7,10 @@ import type { ModelRef } from "@monkeydcode/llm"
 import * as Pipeline from "./verification/pipeline.ts"
 import type { VerificationResult } from "./verification/types.ts"
 import * as Capability from "./model-capability/detector.ts"
+import { loadConfig } from "@monkeydcode/core/mdc-config"
 import * as Grader from "./grader.ts"
+import * as Voter from "./voter.ts"
+import * as Feedback from "./feedback.ts"
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -44,6 +47,9 @@ const TEMP_SETS: Record<number, number[]> = {
 
 export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingResult, unknown> {
     return Effect.gen(function* () {
+        const config = yield* Effect.tryPromise(() => loadConfig())
+        const maxRetries = config.consistency.maxRetries
+
         const level = yield* Capability.detect(task.modelId)
         const temps = TEMP_SETS[level] ?? [0.5]
 
@@ -65,20 +71,19 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         const passing = verified.filter(c => c.verification.passed)
 
         if (passing.length === 0) {
-            if (retries >= 3) {
+            if (retries >= maxRetries) {
                 const best = verified.sort((a, b) => b.verification.score - a.verification.score)[0]!
                 return { selected: { ...best, rrpScore: 0 }, confidence: 0 }
             }
             const errors = verified.flatMap(v => v.verification.errors)
-            const retryPrompt =
-                task.prompt +
-                "\n\nPrevious attempt failed verification. Fix these errors:\n" +
-                JSON.stringify(errors, null, 2)
+            const retryPrompt = Feedback.buildRetryPrompt(task.prompt, errors)
             return yield* sample({ ...task, prompt: retryPrompt }, retries + 1)
         }
 
-        const graded = Grader.gradeAll(passing)
-        const selected = graded.sort((a, b) => b.rrpScore - a.rrpScore)[0]!
+        const graded = yield* Effect.tryPromise(() =>
+            Grader.gradeAll(passing.map(p => ({ ...p, files: task.files }))),
+        )
+        const selected = Voter.selectBest(graded)
         return { selected, confidence: selected.rrpScore }
     })
 }
@@ -90,6 +95,7 @@ function generateCandidate(task: SamplingTask, temperature: number): Effect.Effe
         LLM.generateAsync({
             model: task.model,
             messages: [{ role: "user", content: task.prompt }],
+            temperature,
         }).then(r => ({
             change: r.text,
             temperature,

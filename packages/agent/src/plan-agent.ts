@@ -5,8 +5,28 @@ import { resolveModel } from "./utils.ts"
 import { readFile } from "fs/promises"
 import { join } from "path"
 import { fileURLToPath } from "url"
+import { wrapReAct } from "./react.ts"
 
 const PROMPTS_DIR = join(fileURLToPath(import.meta.url), "../prompts")
+
+/** Max lines per step by decomposition level (plan/agents.md). */
+const MAX_LOC: Record<number, number> = {
+    1: Infinity,
+    2: 100,
+    3: 50,
+    4: 30,
+    5: 20,
+    6: 20,
+}
+
+const MAX_DEPTH: Record<number, number> = {
+    1: 2,
+    2: 3,
+    3: 4,
+    4: 5,
+    5: 6,
+    6: 6,
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -29,7 +49,7 @@ export function plan(task: string, modelId: string): Effect.Effect<Plan, unknown
     return Effect.gen(function* () {
         const level = yield* Capability.detect(modelId)
         const promptTemplate = yield* loadPrompt(level)
-        const filledPrompt = promptTemplate.replace("{TASK}", task)
+        const filledPrompt = wrapReAct(promptTemplate.replace("{TASK}", task))
 
         const response = yield* Effect.promise(() =>
             LLM.generateAsync({
@@ -38,7 +58,7 @@ export function plan(task: string, modelId: string): Effect.Effect<Plan, unknown
             })
         )
 
-        const steps = parseStepsFromResponse(response.text, task)
+        const steps = enforceLevelConstraints(parseStepsFromResponse(response.text, task), level)
         return { steps, decompositionLevel: level }
     })
 }
@@ -168,4 +188,24 @@ function extractFilePaths(text: string): string[] {
         if (m[1]) paths.push(m[1])
     }
     return [...new Set(paths)]
+}
+
+/** Split steps that violate max LOC / depth for the model level. */
+function enforceLevelConstraints(steps: PlanStep[], level: number): PlanStep[] {
+    const maxLoc = MAX_LOC[level] ?? 20
+    const maxSteps = MAX_DEPTH[level] ?? 6
+    const out: PlanStep[] = []
+
+    for (const step of steps) {
+        const estLines = step.description.split("\n").length + step.targetFiles.length * 5
+        if (estLines > maxLoc && step.targetFiles.length > 1) {
+            for (const f of step.targetFiles) {
+                out.push({ ...step, targetFiles: [f], description: `${step.description} (file: ${f})` })
+            }
+        } else {
+            out.push(step)
+        }
+    }
+
+    return out.slice(0, maxSteps)
 }

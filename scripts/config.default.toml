@@ -22,4 +22,4 @@ test_timeout = 120
 max_retries = 3
 
 [context]
-auto_compact_every = 50
+auto_compact_every = 5

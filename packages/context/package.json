@@ -9,7 +9,12 @@
         "./retriever": "./src/retriever.ts",
         "./vector-store": "./src/vector_store.ts",
         "./signature-index": "./src/signature-index.ts",
-        "./compaction": "./src/compaction.ts"
+        "./compaction": "./src/compaction.ts",
+        "./session-init": "./src/session-init.ts",
+        "./knowledge-graph": "./src/knowledge-graph.ts",
+        "./type-index": "./src/type-index.ts",
+        "./example-index": "./src/example-index.ts",
+        "./memory": "./src/memory.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

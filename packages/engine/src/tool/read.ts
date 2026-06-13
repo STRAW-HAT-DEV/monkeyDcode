@@ -10,6 +10,8 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
+import { globalSnapshotStore } from "@monkeydcode/hashline"
+import * as Bom from "@/util/bom"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -299,8 +301,15 @@ export const ReadTool = Tool.define(
         )
       }
 
+      const relPath = path.relative(instance.worktree, filepath).replace(/\\/g, "/")
+      const fullSource = yield* Bom.readFile(fs, filepath).pipe(
+        Effect.catch(() => Effect.succeed({ text: file.raw.join("\n"), bom: false })),
+      )
+      const snapshot = globalSnapshotStore.record(relPath, fullSource.text)
+
       let output = [`<path>${filepath}</path>`, `<type>file</type>`, "<content>\n"].join("\n")
-      output += file.raw.map((line, i) => `${i + file.offset}: ${line}`).join("\n")
+      output += `[${relPath}#${snapshot.tag}]\n`
+      output += file.raw.map((line, i) => `${i + file.offset}:${line}`).join("\n")
 
       const last = file.offset + file.raw.length - 1
       const next = last + 1

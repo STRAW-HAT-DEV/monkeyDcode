@@ -31,6 +31,9 @@ Read these alongside the build steps — they're the **specs** that the build st
 - [agents.md](agents.md) — Agent definitions, ReAct pattern, sub-agents
 - [verification.md](verification.md) — Verification pipeline stages, language detection
 - [python-bridge.md](python-bridge.md) — JSON-RPC protocol, Python module organization
+- [TOOLS.md](TOOLS.md) — Complete 43-tool arsenal and build order
+
+**Implementation audit:** see [../docs/IMPLEMENTATION-STATUS.md](../docs/IMPLEMENTATION-STATUS.md) for plan ↔ code cross-reference.
 
 ## The Big Idea
 
