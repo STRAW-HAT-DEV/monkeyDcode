@@ -60,14 +60,14 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
 
             default: {
                 Status.emit({ agent: "luffy", action: "Creating plan..." })
-                const plan = yield* PlanAgent.plan(message, modelId)
+                const plan = yield* PlanAgent.plan(message, model, modelId)
                 Status.emit({
                     agent: "franky",
                     action: `Executing ${plan.steps.length} steps (level ${plan.decompositionLevel})...`,
                     plan,
                     progress: { current: 0, total: plan.steps.length },
                 })
-                yield* BuildAgent.executePlan(plan, modelId)
+                yield* BuildAgent.executePlan(plan, model, modelId)
             }
         }
 
@@ -92,7 +92,7 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
                         verificationCriteria: "Full verification pipeline passes",
                     }],
                     decompositionLevel: 1,
-                }, modelId)
+                }, model, modelId)
             }
         }
 
@@ -118,6 +118,7 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
 
             yield* BuildAgent.executePlan(
                 { steps: fixSteps, decompositionLevel: 1 },
+                model,
                 modelId,
             )
         }

@@ -1,7 +1,11 @@
 /** Check whether Ollama is up and a model tag is available locally. */
-export async function isOllamaModelAvailable(modelId: string): Promise<boolean> {
+export async function isOllamaModelAvailable(
+    modelId: string,
+    baseUrl = "http://localhost:11434",
+): Promise<boolean> {
     try {
-        const res = await fetch("http://localhost:11434/api/tags")
+        const root = baseUrl.replace(/\/v1\/?$/, "")
+        const res = await fetch(`${root}/api/tags`)
         if (!res.ok) return false
         const data = (await res.json()) as { models?: Array<{ name: string }> }
         const models = data.models ?? []

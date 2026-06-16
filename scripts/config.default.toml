@@ -1,21 +1,13 @@
+# Example monkeyDcode config — created automatically on first run.
+# Do not commit API keys; they are stored in credentials.json
+
 [default]
-model    = "qwen2.5-coder:7b"
-provider = "ollama"
-
-[providers.ollama]
-base_url = "http://localhost:11434"
-
-[providers.anthropic]
-api_key_env = "ANTHROPIC_API_KEY"
-
-[providers.openrouter]
-api_key_env = "OPENROUTER_API_KEY"
-
-[providers.deepseek]
-api_key_env = "DEEPSEEK_API_KEY"
+# model and provider are set during interactive setup
+model = ""
+provider = ""
 
 [verification]
-stages       = ["syntax", "typecheck", "lint", "tests"]
+stages = ["syntax", "typecheck", "lint", "tests"]
 test_timeout = 120
 
 [consistency]

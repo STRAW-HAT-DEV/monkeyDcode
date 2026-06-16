@@ -21,13 +21,13 @@ CLI coding agent that produces consistent results across LLM sizes — from loca
 ### Quick install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USER/monkeyDcode/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/STRAW-HAT-DEV/monkeyDcode/main/scripts/install.sh | bash
 ```
 
 ### Manual install
 
 ```bash
-git clone https://github.com/YOUR_USER/monkeyDcode.git
+git clone https://github.com/STRAW-HAT-DEV/monkeyDcode.git
 cd monkeyDcode
 bun install
 ./scripts/setup-python.sh

@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { LLM } from "@monkeydcode/llm"
 import * as Capability from "@monkeydcode/consistency/model-capability/detector"
-import { resolveModel } from "./utils.ts"
+import type { ModelRef } from "@monkeydcode/llm"
 import { readFile } from "fs/promises"
 import { join } from "path"
 import { fileURLToPath } from "url"
@@ -45,7 +45,7 @@ export interface Plan {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-export function plan(task: string, modelId: string): Effect.Effect<Plan, unknown> {
+export function plan(task: string, model: ModelRef, modelId: string): Effect.Effect<Plan, unknown> {
     return Effect.gen(function* () {
         const level = yield* Capability.detect(modelId)
         const promptTemplate = yield* loadPrompt(level)
@@ -53,7 +53,7 @@ export function plan(task: string, modelId: string): Effect.Effect<Plan, unknown
 
         const response = yield* Effect.promise(() =>
             LLM.generateAsync({
-                model: resolveModel(modelId),
+                model,
                 messages: [{ role: "user", content: filledPrompt }],
             })
         )

@@ -64,7 +64,7 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
                 role: m.role,
                 content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
             }))
-            const compacted = await Effect.runPromise(compact(history, modelId))
+            const compacted = await Effect.runPromise(compact(history, model))
             const summary = compacted[0]?.content ?? ""
             Runner.logMessage(runnerSessionId, "system", summary)
             setMessages(prev => [...prev, { role: "system", content: summary }])

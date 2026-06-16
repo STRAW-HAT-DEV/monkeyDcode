@@ -1,7 +1,7 @@
 import { homedir } from "os"
-import { join } from "path"
+import { join, dirname } from "path"
 import { existsSync } from "fs"
-import { readFile } from "fs/promises"
+import { mkdir, readFile, writeFile } from "fs/promises"
 
 export interface MdcConfig {
     model: string
@@ -20,14 +20,11 @@ export interface MdcConfig {
     }
 }
 
+/** Behavioral defaults only — model/provider are set by user at first run. */
 export const DEFAULT_CONFIG: MdcConfig = {
-    model: "qwen2.5-coder:7b",
-    provider: "ollama",
-    providers: {
-        ollama: { baseUrl: "http://localhost:11434" },
-        anthropic: { apiKeyEnv: "ANTHROPIC_API_KEY" },
-        openrouter: { apiKeyEnv: "OPENROUTER_API_KEY" },
-    },
+    model: "",
+    provider: "",
+    providers: {},
     verification: {
         stages: ["syntax", "typecheck", "lint", "tests"],
         testTimeout: 120,
@@ -89,7 +86,7 @@ export async function loadConfig(): Promise<MdcConfig> {
         const c = parsed.consistency ?? {}
         const ctx = parsed.context ?? {}
 
-        const providers: MdcConfig["providers"] = { ...DEFAULT_CONFIG.providers }
+        const providers: MdcConfig["providers"] = {}
         for (const [key, val] of Object.entries(parsed)) {
             if (key.startsWith("providers.")) {
                 const name = key.slice("providers.".length)
@@ -98,8 +95,8 @@ export async function loadConfig(): Promise<MdcConfig> {
         }
 
         return {
-            model: String(d.model ?? DEFAULT_CONFIG.model),
-            provider: String(d.provider ?? DEFAULT_CONFIG.provider),
+            model: String(d.model ?? ""),
+            provider: String(d.provider ?? ""),
             providers,
             verification: {
                 stages: Array.isArray(v.stages)
@@ -125,3 +122,33 @@ export async function loadConfig(): Promise<MdcConfig> {
 export function resolveConfigPath(): string {
     return configPath()
 }
+
+function quoteToml(s: string): string {
+    return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+}
+
+export async function saveConfig(config: MdcConfig): Promise<void> {
+    const path = configPath()
+    await mkdir(dirname(path), { recursive: true })
+
+    const lines = [
+        "# monkeyDcode user config — model/provider set at first run",
+        "[default]",
+        `model = ${quoteToml(config.model)}`,
+        `provider = ${quoteToml(config.provider)}`,
+        "",
+        "[verification]",
+        `stages = [${config.verification.stages.map(quoteToml).join(", ")}]`,
+        `test_timeout = ${config.verification.testTimeout}`,
+        "",
+        "[consistency]",
+        `max_retries = ${config.consistency.maxRetries}`,
+        "",
+        "[context]",
+        `auto_compact_every = ${config.context.autoCompactEvery}`,
+        "",
+    ]
+
+    await writeFile(path, lines.join("\n"), "utf-8")
+}
+

@@ -25,6 +25,10 @@ export type { Protocol, RequestBuilder, ResponseParser } from "./protocol.ts"
 export { Route } from "./route.ts"
 export type { RouteConfig } from "./route.ts"
 export { RouteRegistry } from "./route-registry.ts"
+export { LLMRuntime } from "./runtime.ts"
+export { resolveModel } from "./resolve-model.ts"
+export { bootstrapLLM } from "./bootstrap.ts"
+export { registerOpenAICompatibleProvider } from "./register-custom.ts"
 export { LLM } from "./llm.ts"
 
 // Protocols (for building custom providers)
@@ -36,6 +40,7 @@ export { anthropic } from "./providers/anthropic.ts"
 export { openai } from "./providers/openai.ts"
 export { ollama } from "./providers/ollama.ts"
 export { deepseek } from "./providers/deepseek.ts"
+export { groq } from "./providers/groq.ts"
 export { openrouter } from "./providers/openrouter.ts"
 
 // Uppercase re-exports for opencode engine compatibility
@@ -44,6 +49,7 @@ export { anthropic as Anthropic } from "./providers/anthropic.ts"
 export { openai as OpenAI } from "./providers/openai.ts"
 export { ollama as Ollama } from "./providers/ollama.ts"
 export { deepseek as DeepSeek } from "./providers/deepseek.ts"
+export { groq as Groq } from "./providers/groq.ts"
 
 // Type aliases for opencode engine compatibility
 export type Usage = import("./schema.ts").UsageStats
