@@ -12,61 +12,31 @@ CLI coding agent that produces consistent results across LLM sizes — from loca
 
 ## Install
 
-### Prerequisites
+Use the full OS guide:
 
-- [Bun](https://bun.sh) 1.3+
-- [uv](https://docs.astral.sh/uv/) (Python tooling)
-- [Ollama](https://ollama.com) (optional, for local models)
+- [INSTALLATION.md](./INSTALLATION.md)
 
-### Quick install
+Quick path:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/STRAW-HAT-DEV/monkeyDcode/main/scripts/install.sh | bash
-```
+- **Windows:** `.\scripts\install.ps1`
+- **macOS/Linux:** `curl -fsSL https://raw.githubusercontent.com/STRAW-HAT-DEV/monkeyDcode/main/scripts/install.sh | bash`
 
-### Manual install
+Then run:
 
 ```bash
-git clone https://github.com/STRAW-HAT-DEV/monkeyDcode.git
-cd monkeyDcode
-bun install
-./scripts/setup-python.sh
-chmod +x bin/mdc
+mdc
 ```
 
-## Configure
-
-Copy the default config:
-
-```bash
-mkdir -p ~/.config/monkeydcode
-cp scripts/config.default.toml ~/.config/monkeydcode/config.toml
-```
-
-Edit `~/.config/monkeydcode/config.toml`:
-
-```toml
-[default]
-model    = "qwen2.5-coder:7b"
-provider = "ollama"
-
-[verification]
-stages = ["syntax", "typecheck", "lint", "tests"]
-
-[context]
-auto_compact_every = 5
-```
+First run opens the setup wizard for provider + API key + model.
 
 ## Use
 
 ```bash
-# Interactive TUI
-bun run dev
-# or
-./bin/mdc
+# Interactive (global command)
+mdc
 
 # One-shot task
-./bin/mdc "Add pagination to the users API"
+mdc "Add pagination to the users API"
 ```
 
 ## Development
