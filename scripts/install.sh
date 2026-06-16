@@ -2,6 +2,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${MONKEYDCODE_HOME:-$HOME/.monkeydcode}"
+REPO_URL="${MONKEYDCODE_REPO:-https://github.com/STRAW-HAT-DEV/monkeyDcode.git}"
 BOLD="\033[1m"
 CYAN="\033[36m"
 GREEN="\033[32m"
@@ -9,16 +10,9 @@ YELLOW="\033[33m"
 RED="\033[91m"
 RESET="\033[0m"
 
-echo -e "${YELLOW}${BOLD}"
-echo "        _____________________________________________"
-echo "    ___/  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~  ~   \___"
-echo "   /                                                     \\"
-echo "   \_____________________________________________________/${RESET}"
 echo -e "${CYAN}${BOLD}  monkeyDcode — Installing...${RESET}"
-echo -e "${RED}  \"I'm gonna be the King of the Coding Agents!\"${RESET}"
 echo ""
 
-# ─── Check dependencies ───────────────────────────────────────────────────────
 echo -e "🔍 ${BOLD}Checking dependencies...${RESET}"
 
 if ! command -v bun &>/dev/null; then
@@ -31,68 +25,64 @@ if ! command -v git &>/dev/null; then
     echo -e "${RED}❌ Git not found.${RESET}"
     exit 1
 fi
-echo -e "  ${GREEN}✓ Git$(git --version | awk '{print $3}')${RESET}"
-
-if ! command -v python3 &>/dev/null; then
-    echo -e "${YELLOW}⚠️  Python3 not found — Python bridge tools will be unavailable.${RESET}"
-else
-    echo -e "  ${GREEN}✓ Python $(python3 --version | awk '{print $2}')${RESET}"
-fi
+echo -e "  ${GREEN}✓ Git $(git --version | awk '{print $3}')${RESET}"
 
 echo ""
 
-# ─── Clone or update ──────────────────────────────────────────────────────────
-echo -e "⚓ ${BOLD}Setting sail to $INSTALL_DIR...${RESET}"
-
-if [ -d "$INSTALL_DIR/.git" ]; then
-    echo -e "  Updating existing installation..."
+# Clone or use existing repo
+if [ -f "$(dirname "$0")/../package.json" ] && [ "${MONKEYDCODE_INSTALL_FROM_REPO:-}" = "1" ]; then
+    INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+    echo -e "⚓ Using current repo at $INSTALL_DIR"
+elif [ -d "$INSTALL_DIR/.git" ]; then
+    echo -e "⚓ Updating $INSTALL_DIR..."
     git -C "$INSTALL_DIR" pull --ff-only
 else
-    echo -e "  Cloning monkeyDcode..."
-    git clone https://github.com/shaikashfaaqhamja/monkeyDcode "$INSTALL_DIR"
+    echo -e "⚓ Cloning to $INSTALL_DIR..."
+    git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
 echo ""
-
-# ─── Install JS dependencies ──────────────────────────────────────────────────
-echo -e "🔧 ${BOLD}Franky is building... (bun install)${RESET}"
+echo -e "🔧 ${BOLD}bun install${RESET}"
 bun install --cwd "$INSTALL_DIR"
-echo ""
 
-# ─── Setup Python bridge ──────────────────────────────────────────────────────
-if command -v python3 &>/dev/null; then
-    echo -e "🌸 ${BOLD}Robin is setting up the Python bridge...${RESET}"
-    bash "$INSTALL_DIR/scripts/setup-python.sh"
+if command -v python3 &>/dev/null || command -v python &>/dev/null; then
     echo ""
-fi
-
-# ─── Install binary ───────────────────────────────────────────────────────────
-echo -e "🗡️  ${BOLD}Zoro is linking the blade...${RESET}"
-chmod +x "$INSTALL_DIR/bin/mdc"
-
-if [ -w "/usr/local/bin" ]; then
-    ln -sf "$INSTALL_DIR/bin/mdc" /usr/local/bin/mdc
-    echo -e "  ${GREEN}✓ Linked to /usr/local/bin/mdc${RESET}"
-else
-    mkdir -p "$HOME/.local/bin"
-    ln -sf "$INSTALL_DIR/bin/mdc" "$HOME/.local/bin/mdc"
-    echo -e "  ${GREEN}✓ Linked to ~/.local/bin/mdc${RESET}"
-    echo -e "  ${YELLOW}Add ~/.local/bin to your PATH if not already there.${RESET}"
-fi
-
-# ─── Create default config ────────────────────────────────────────────────────
-CONFIG_DIR="$HOME/.config/monkeydcode"
-CONFIG_FILE="$CONFIG_DIR/config.toml"
-mkdir -p "$CONFIG_DIR"
-
-if [ ! -f "$CONFIG_FILE" ]; then
-    cp "$INSTALL_DIR/scripts/config.default.toml" "$CONFIG_FILE"
-    echo -e "  ${GREEN}✓ Config created at $CONFIG_FILE${RESET}"
+    echo -e "🌸 ${BOLD}Python bridge${RESET}"
+    bash "$INSTALL_DIR/scripts/setup-python.sh"
 fi
 
 echo ""
-echo -e "${GREEN}${BOLD}🏴‍☠️  Installation complete!${RESET}"
+echo -e "🗡️  ${BOLD}Linking global commands: mdc, monkeydcode${RESET}"
+chmod +x "$INSTALL_DIR/bin/mdc" "$INSTALL_DIR/bin/monkeydcode"
+
+link_bin() {
+    local name="$1"
+    local target="$INSTALL_DIR/bin/$name"
+    if [ -w "/usr/local/bin" ]; then
+        ln -sf "$target" "/usr/local/bin/$name"
+        echo -e "  ${GREEN}✓ /usr/local/bin/$name${RESET}"
+    else
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$target" "$HOME/.local/bin/$name"
+        echo -e "  ${GREEN}✓ ~/.local/bin/$name${RESET}"
+    fi
+}
+
+link_bin mdc
+link_bin monkeydcode
+
+if ! echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then
+    echo -e "  ${YELLOW}Add to ~/.bashrc or ~/.zshrc:${RESET}"
+    echo -e "  ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${RESET}"
+fi
+
 echo ""
-echo -e "  Run ${CYAN}${BOLD}mdc${RESET} to start."
-echo -e "  Edit ${CYAN}$CONFIG_FILE${RESET} to set your model and API keys."
+echo -e "${GREEN}${BOLD}✅ Installation complete!${RESET}"
+echo ""
+echo -e "  ${CYAN}${BOLD}mdc${RESET}              Start agent (like ${CYAN}claude${RESET})"
+echo -e "  ${CYAN}mdc setup${RESET}        Configure provider + API key"
+echo -e "  ${CYAN}mdc doctor${RESET}       Check dependencies"
+echo -e "  ${CYAN}mdc \"your task\"${RESET}  One-shot"
+echo ""
+echo -e "  First run opens an interactive model setup wizard."
 echo ""
