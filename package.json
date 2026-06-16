@@ -10,8 +10,14 @@
     "workspaces": [
         "packages/*"
     ],
+    "bin": {
+        "mdc": "./bin/mdc",
+        "monkeydcode": "./bin/monkeydcode"
+    },
     "scripts": {
         "dev": "bun run --filter @monkeydcode/tui dev",
+        "mdc": "bun bin/mdc",
+        "start": "bun bin/mdc",
         "build": "bun run --filter '*' build",
         "typecheck": "bun run --filter '*' typecheck",
         "test": "bun test packages",

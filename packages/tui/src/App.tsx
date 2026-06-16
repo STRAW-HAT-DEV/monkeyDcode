@@ -13,6 +13,7 @@ import { AgentStatus as AgentStatusView } from "./components/AgentStatus.tsx"
 import { ProgressBar } from "./components/ProgressBar.tsx"
 import { DiffView } from "./components/DiffView.tsx"
 import { PlanView } from "./components/PlanView.tsx"
+import { handleSlashCommand } from "./slash-commands.ts"
 
 interface Message {
     role: "user" | "assistant" | "system"
@@ -52,6 +53,30 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
         if (!text || busy) return
 
         setInput("")
+
+        if (text.startsWith("/")) {
+            const slash = handleSlashCommand(text, {
+                provider: model.provider,
+                modelId: model.id,
+            })
+            if (!slash.handled) return
+
+            if (slash.exit) {
+                process.exit(0)
+            }
+            if (slash.message === "__CLEAR__") {
+                setMessages([])
+                setPlan(null)
+                setDiff("")
+                setStatus({ agent: "idle", action: "Ready — type your task" })
+                return
+            }
+            if (slash.message) {
+                setMessages(prev => [...prev, { role: "system", content: slash.message! }])
+            }
+            return
+        }
+
         setBusy(true)
         setMessages(prev => [...prev, { role: "user", content: text }])
         setMessageCount(c => c + 1)
@@ -95,7 +120,7 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
         <box flexDirection="column" padding={1} width="100%" height="100%">
             <box flexDirection="column" marginBottom={1}>
                 <text>monkeyDcode</text>
-                <text>model: {model.provider}/{model.id} · {echoMode ? "echo (session processor)" : "orchestrator"}</text>
+                <text>model: {model.provider}/{model.id} · /help for commands</text>
             </box>
 
             <AgentStatusView status={status} />
@@ -117,7 +142,7 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
                     focused={!busy}
                     onChange={setInput}
                     onSubmit={submit}
-                    placeholder={busy ? "Working..." : "What will you build?"}
+                    placeholder={busy ? "Working..." : "Task or /help"}
                 />
             </box>
         </box>
