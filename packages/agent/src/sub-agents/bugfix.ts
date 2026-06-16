@@ -46,9 +46,10 @@ export function fix(report: BugReport, model: ModelRef, modelId: string): Effect
         // Step 2 — Fix the bug using the plan → build pipeline
         const fixPlan = yield* PlanAgent.plan(
             `Fix this bug:\n${report.error}\n${report.stack ?? ""}\n\nFailing test is at: ${testFile}\nSuspect files: ${suspectFiles.join(", ")}`,
+            model,
             modelId,
         )
-        yield* BuildAgent.executePlan(fixPlan, modelId)
+        yield* BuildAgent.executePlan(fixPlan, model, modelId)
 
         // Step 3 — Verify the reproduction test now passes
         const result = yield* Effect.promise(() =>

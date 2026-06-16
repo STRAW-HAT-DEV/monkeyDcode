@@ -13,7 +13,7 @@ import {
 } from "@monkeydcode/hashline"
 import { syntaxGateForFile } from "@monkeydcode/consistency/verification/syntax"
 import type { Plan, PlanStep } from "./plan-agent.ts"
-import { resolveModel } from "./utils.ts"
+import type { ModelRef } from "@monkeydcode/llm"
 import * as WorkingMemory from "./working-memory.ts"
 import * as Status from "./status.ts"
 import { assertCanWrite } from "./registry.ts"
@@ -32,7 +32,7 @@ interface ExtractedBlock {
 
 // ─── Plan execution ───────────────────────────────────────────────────────────
 
-export function executePlan(plan: Plan, modelId: string): Effect.Effect<void, unknown> {
+export function executePlan(plan: Plan, model: ModelRef, modelId: string): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
         for (let i = 0; i < plan.steps.length; i++) {
             const step = plan.steps[i]!
@@ -42,12 +42,12 @@ export function executePlan(plan: Plan, modelId: string): Effect.Effect<void, un
                 plan,
                 progress: { current: i + 1, total: plan.steps.length },
             })
-            yield* executeStep(step, modelId, i)
+            yield* executeStep(step, model, modelId, i)
         }
     })
 }
 
-function executeStep(step: PlanStep, modelId: string, index: number): Effect.Effect<void, unknown> {
+function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: number): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
         assertCanWrite("build")
         const capabilityLevel = yield* Capability.detect(modelId)
@@ -58,7 +58,6 @@ function executeStep(step: PlanStep, modelId: string, index: number): Effect.Eff
         )
 
         const prompt = wrapReAct(buildExecutionPrompt(step, context))
-        const model = resolveModel(modelId)
 
         const result = yield* Sampler.sample({
             prompt,

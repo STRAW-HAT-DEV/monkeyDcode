@@ -8,6 +8,7 @@ import type { LLMRequest, LLMResponse, LLMEvent, UsageStats } from "./schema.ts"
 import { LLMError } from "./error.ts"
 import { RouteRegistry } from "./route-registry.ts"
 import type { Route } from "./route.ts"
+import { LLMRuntime } from "./runtime.ts"
 
 async function* readLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
     const reader = body.getReader()
@@ -44,8 +45,9 @@ function resolveRoute(req: LLMRequest): Route {
 
 async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     const { protocol, baseUrl, apiKey, defaultHeaders = {} } = route.config
-    const key = apiKey() ?? ""
-    const url = `${baseUrl}${protocol.buildPath(req.model.id)}`
+    const resolvedBase = LLMRuntime.getBaseUrl(route.provider, baseUrl)
+    const key = LLMRuntime.getApiKey(route.provider, apiKey) ?? ""
+    const url = `${resolvedBase}${protocol.buildPath(req.model.id)}`
     const headers = { ...defaultHeaders, ...protocol.buildHeaders(key) }
     const body = JSON.stringify(protocol.buildBody(req))
 

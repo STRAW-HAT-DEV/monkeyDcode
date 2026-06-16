@@ -2,13 +2,7 @@ import { Effect } from "effect"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
 import { loadConfig } from "@monkeydcode/core/mdc-config"
-import { ollama } from "@monkeydcode/llm/providers/ollama"
-import { anthropic } from "@monkeydcode/llm/providers/anthropic"
-
-function resolveModel(modelId: string): ModelRef {
-    if (modelId.startsWith("claude-")) return anthropic.model(modelId)
-    return ollama.model(modelId)
-}
+import { resolveModel } from "@monkeydcode/llm/resolve-model"
 
 interface Message {
     role: string
@@ -25,13 +19,14 @@ export async function shouldCompact(messageCount: number): Promise<boolean> {
     return messageCount > 0 && messageCount % every === 0
 }
 
-export function compact(messages: Message[], modelId?: string) {
+export function compact(messages: Message[], model?: ModelRef) {
     return Effect.gen(function* () {
         const cfg = yield* Effect.promise(() => loadConfig())
-        const model: ModelRef = modelId ? resolveModel(modelId) : resolveModel(cfg.model)
+        const resolved: ModelRef =
+            model ?? resolveModel(cfg.provider, cfg.model)
         const response = yield* Effect.promise(() =>
             LLM.generateAsync({
-                model,
+                model: resolved,
                 messages: [{
                     role: "user",
                     content: `Summarize this conversation concisely, preserving all key decisions and context:\n\n${formatMessages(messages)}`,

@@ -32,11 +32,12 @@ CRITICAL CONSTRAINTS:
 - Only restructure internals
 
 Current verification score: ${(before.score * 100).toFixed(0)}%`,
+            model,
             modelId,
         )
 
         // Step 3 — Execute the refactor
-        yield* BuildAgent.executePlan(plan, modelId)
+        yield* BuildAgent.executePlan(plan, model, modelId)
 
         // Step 4 — Verify behavior is preserved
         const after = yield* Effect.promise(() =>

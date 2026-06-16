@@ -11,22 +11,23 @@ export function build(spec: string, model: ModelRef, modelId: string): Effect.Ef
         const clarifiedSpec = yield* clarify(spec, model)
 
         // Step 2 — Plan the feature in steps
-        const plan = yield* PlanAgent.plan(clarifiedSpec, modelId)
+        const plan = yield* PlanAgent.plan(clarifiedSpec, model, modelId)
 
         // Step 3 — Execute: scaffold first, then implement
         const { scaffold, implementation } = splitPlan(plan)
 
         if (scaffold.steps.length > 0) {
-            yield* BuildAgent.executePlan(scaffold, modelId)
+            yield* BuildAgent.executePlan(scaffold, model, modelId)
         }
-        yield* BuildAgent.executePlan(implementation, modelId)
+        yield* BuildAgent.executePlan(implementation, model, modelId)
 
         // Step 4 — Write tests for the new feature
         const testPlan = yield* PlanAgent.plan(
             `Write comprehensive tests for this feature:\n${clarifiedSpec}\n\nTests must cover: happy path, edge cases, error handling.`,
+            model,
             modelId,
         )
-        yield* BuildAgent.executePlan(testPlan, modelId)
+        yield* BuildAgent.executePlan(testPlan, model, modelId)
     })
 }
 

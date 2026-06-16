@@ -1,6 +1,12 @@
 {
     "name": "monkeydcode",
     "private": true,
+    "license": "MIT",
+    "author": "STRAW-HAT-DEV (https://github.com/STRAW-HAT-DEV)",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/STRAW-HAT-DEV/monkeyDcode.git"
+    },
     "workspaces": [
         "packages/*"
     ],

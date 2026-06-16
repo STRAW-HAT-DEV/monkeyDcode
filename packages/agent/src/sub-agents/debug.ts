@@ -48,9 +48,10 @@ export function debug(traceback: string, model: ModelRef, modelId: string): Effe
                 // Step 4 — Fix the confirmed root cause
                 const fixPlan = yield* PlanAgent.plan(
                     `Fix this confirmed bug:\n${h.hypothesis}\n\nLocation: ${h.location.file}:${h.location.line} in ${h.location.function}\n\nTraceback:\n${traceback}`,
+                    model,
                     modelId,
                 )
-                yield* BuildAgent.executePlan(fixPlan, modelId)
+                yield* BuildAgent.executePlan(fixPlan, model, modelId)
                 return
             }
         }
@@ -58,9 +59,10 @@ export function debug(traceback: string, model: ModelRef, modelId: string): Effe
         // No hypothesis confirmed — fall back to general fix
         const fallbackPlan = yield* PlanAgent.plan(
             `Debug and fix this error. No hypothesis was confirmed — investigate broadly:\n${traceback}`,
+            model,
             modelId,
         )
-        yield* BuildAgent.executePlan(fallbackPlan, modelId)
+        yield* BuildAgent.executePlan(fallbackPlan, model, modelId)
     })
 }
 

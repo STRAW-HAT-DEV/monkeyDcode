@@ -13,7 +13,11 @@
         "./error": "./src/error.ts",
         "./protocol": "./src/protocol.ts",
         "./protocols/*": "./src/protocols/*.ts",
-        "./ollama-health": "./src/ollama-health.ts"
+        "./ollama-health": "./src/ollama-health.ts",
+        "./runtime": "./src/runtime.ts",
+        "./resolve-model": "./src/resolve-model.ts",
+        "./bootstrap": "./src/bootstrap.ts",
+        "./register-custom": "./src/register-custom.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
