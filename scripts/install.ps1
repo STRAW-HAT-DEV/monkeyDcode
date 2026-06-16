@@ -1,44 +1,40 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-    Install monkeyDcode on Windows — global `mdc` command (like `claude` for Claude Code).
-
-.EXAMPLE
-    git clone https://github.com/STRAW-HAT-DEV/monkeyDcode.git
-    cd monkeyDcode
-    .\scripts\install.ps1
-#>
 param(
     [string]$InstallDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
-Write-Host ""
-Write-Host "  monkeyDcode — Installing..." -ForegroundColor Cyan
-Write-Host ""
+function Test-Cmd {
+    param([string]$Name)
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
 
-function Test-Cmd($name) { return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
+Write-Host ""
+Write-Host "monkeyDcode Windows installer" -ForegroundColor Cyan
+Write-Host ""
 
 Write-Host "Checking dependencies..."
-if (-not (Test-Cmd bun)) {
-    Write-Host "  X Bun not found — https://bun.sh" -ForegroundColor Red
+if (-not (Test-Cmd "bun")) {
+    Write-Host "Bun not found. Install from https://bun.sh" -ForegroundColor Red
     exit 1
 }
-Write-Host "  OK Bun $(bun --version)" -ForegroundColor Green
+Write-Host ("OK Bun {0}" -f (bun --version)) -ForegroundColor Green
 
-if (-not (Test-Cmd git)) {
-    Write-Host "  X Git not found" -ForegroundColor Red
+if (-not (Test-Cmd "git")) {
+    Write-Host "Git not found." -ForegroundColor Red
     exit 1
 }
-Write-Host "  OK Git" -ForegroundColor Green
+Write-Host "OK Git" -ForegroundColor Green
 
-if ($InstallDir -eq "") {
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $SourceDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 } else {
     if (-not (Test-Path $InstallDir)) {
+        Write-Host "Cloning repository to $InstallDir ..."
         git clone https://github.com/STRAW-HAT-DEV/monkeyDcode.git $InstallDir
     } else {
+        Write-Host "Updating repository at $InstallDir ..."
         git -C $InstallDir pull --ff-only
     }
     $SourceDir = (Resolve-Path $InstallDir).Path
@@ -46,49 +42,51 @@ if ($InstallDir -eq "") {
 
 Write-Host ""
 Write-Host "Source: $SourceDir"
-Write-Host "bun install..."
+Write-Host "Running bun install..."
 Push-Location $SourceDir
 bun install
+Pop-Location
 
-if (Test-Cmd python) {
-    Write-Host "Python bridge..."
-    if (-not (Test-Cmd uv)) {
-        Write-Host "  Installing uv..."
+if (Test-Cmd "python") {
+    Write-Host "Setting up Python bridge..."
+    if (-not (Test-Cmd "uv")) {
+        Write-Host "uv not found. Installing uv..."
         irm https://astral.sh/uv/install.ps1 | iex
         $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
     }
-    Push-Location (Join-Path $SourceDir "tools")
-    uv venv 2>$null; uv sync
+
+    $toolsDir = Join-Path $SourceDir "tools"
+    Push-Location $toolsDir
+    uv venv | Out-Null
+    uv sync
     Pop-Location
 }
-Pop-Location
 
-$BinDir = Join-Path $env:USERPROFILE ".local\bin"
-New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+$binDir = Join-Path $env:USERPROFILE ".local\bin"
+New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-$MdcBin = Join-Path $SourceDir "bin\mdc"
-$mdcWrapper = Join-Path $BinDir "mdc.cmd"
-@"
-@echo off
-bun "$MdcBin" %*
-"@ | Set-Content -Encoding ASCII $mdcWrapper
+$mdcBin = Join-Path $SourceDir "bin\mdc"
+$mdcCmd = Join-Path $binDir "mdc.cmd"
+@(
+    "@echo off",
+    "bun `"$mdcBin`" %*"
+) | Set-Content -Encoding ASCII $mdcCmd
 
-$monkeyWrapper = Join-Path $BinDir "monkeydcode.cmd"
-@"
-@echo off
-bun "$MdcBin" %*
-"@ | Set-Content -Encoding ASCII $monkeyWrapper
+$monkeyCmd = Join-Path $binDir "monkeydcode.cmd"
+@(
+    "@echo off",
+    "bun `"$mdcBin`" %*"
+) | Set-Content -Encoding ASCII $monkeyCmd
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$BinDir*") {
-    [Environment]::SetEnvironmentVariable("Path", "$userPath;$BinDir", "User")
-    $env:Path = "$env:Path;$BinDir"
-    Write-Host "Added $BinDir to user PATH" -ForegroundColor Yellow
+if ($userPath -notlike "*$binDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$userPath;$binDir", "User")
+    Write-Host "Added $binDir to user PATH. Open a new terminal." -ForegroundColor Yellow
 }
 
 Write-Host ""
-Write-Host "Done! Open a new terminal and run:" -ForegroundColor Green
-Write-Host "  mdc          # start agent (first run: model setup)" -ForegroundColor Cyan
-Write-Host "  mdc setup    # change API key / provider" -ForegroundColor Cyan
-Write-Host "  mdc doctor   # check deps" -ForegroundColor Cyan
+Write-Host "Done." -ForegroundColor Green
+Write-Host "Open a NEW PowerShell terminal, then run:"
+Write-Host "  mdc"
+Write-Host "  mdc setup"
 Write-Host ""

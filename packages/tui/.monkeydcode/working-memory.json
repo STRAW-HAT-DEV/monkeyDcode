@@ -1,0 +1,12 @@
+{
+  "currentGoal": "what languages do you support",
+  "completedSteps": [
+    {
+      "index": 0,
+      "confidence": 0,
+      "timestamp": "2026-06-16T13:28:05.580Z"
+    }
+  ],
+  "knownConstraints": [],
+  "errorHistory": []
+}

@@ -5,16 +5,20 @@ Categories:
 - "feature" — the user wants new functionality added
 - "refactor" — the user wants existing code restructured without changing behavior
 - "debug" — the user has an error traceback or is asking why something isn't working
-- "general" — anything else (question, explanation request, other task)
+- "chat" — a greeting, small talk, a question that needs only an answer, or anything that does NOT require changing code in the project
+- "general" — a concrete coding task that doesn't fit the above but still requires editing files
 
 Message:
 {MESSAGE}
 
 Rules:
+- Greetings ("hi", "hello", "hey"), thanks, or small talk → "chat"
+- Questions answerable with an explanation and NO code edits ("what is X", "how does Y work", "explain Z") → "chat"
 - If the message contains a stack trace or exception → "debug"
 - If the message says "fix", "broken", "error", "bug", "crash", "fails" → "bug_fix"
 - If the message says "add", "implement", "build", "create", "new feature" → "feature"
 - If the message says "refactor", "clean up", "restructure", "reorganize" → "refactor"
 - When ambiguous between bug_fix and debug: if there's a traceback → "debug", else → "bug_fix"
+- Only pick "general" if the user clearly wants files in the project created or modified
 
 Output ONLY the category string. Nothing else. No explanation.

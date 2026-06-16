@@ -59,7 +59,10 @@ async function connect(): Promise<BridgeState> {
     })
 
     proc.stderr?.on("data", (d: Buffer) => {
-        process.stderr.write(`[bridge] ${d.toString()}`)
+        // In interactive TUI mode, raw stderr output can corrupt the terminal UI and break input.
+        if (process.env.MDCODE_BRIDGE_VERBOSE === "1") {
+            process.stderr.write(`[bridge] ${d.toString()}`)
+        }
     })
 
     let connectTarget: { host: string; port: number } | { path: string } =

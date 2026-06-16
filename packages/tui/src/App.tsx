@@ -50,7 +50,7 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
 
     const submit = async () => {
         const text = input.trim()
-        if (!text || busy) return
+        if (!text) return
 
         setInput("")
 
@@ -74,6 +74,14 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
             if (slash.message) {
                 setMessages(prev => [...prev, { role: "system", content: slash.message! }])
             }
+            return
+        }
+
+        if (busy) {
+            setMessages(prev => [
+                ...prev,
+                { role: "system", content: "Still working on previous request. Use /clear or wait a moment." },
+            ])
             return
         }
 
@@ -109,7 +117,10 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
             await logAssistantToEngine(process.cwd(), engineSessionId, reply)
         } catch (e) {
             const err = e instanceof Error ? e.message : String(e)
-            setMessages(prev => [...prev, { role: "assistant", content: `Error: ${err}` }])
+            const friendly = /ollama: HTTP 500/i.test(err)
+                ? "Ollama crashed while serving the model. Try a smaller model or restart Ollama (`ollama serve`)."
+                : `Error: ${err}`
+            setMessages(prev => [...prev, { role: "assistant", content: friendly }])
         } finally {
             setBusy(false)
             setProgress(null)
@@ -119,7 +130,7 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
     return (
         <box flexDirection="column" padding={1} width="100%" height="100%">
             <box flexDirection="column" marginBottom={1}>
-                <text>monkeyDcode</text>
+                <text>⚓ monkeyDcode</text>
                 <text>model: {model.provider}/{model.id} · /help for commands</text>
             </box>
 
@@ -139,10 +150,10 @@ export function App({ config, model, modelId, runnerSessionId, engineSessionId, 
                 <text>{"> "}</text>
                 <input
                     value={input}
-                    focused={!busy}
+                    focused={true}
                     onChange={setInput}
                     onSubmit={submit}
-                    placeholder={busy ? "Working..." : "Task or /help"}
+                    placeholder={busy ? "Working... you can still type /help" : "Task or /help"}
                 />
             </box>
         </box>

@@ -43,6 +43,16 @@ const TEMP_SETS: Record<number, number[]> = {
     6: [0.3, 0.4, 0.5, 0.6],
 }
 
+// Providers that serve a single model instance locally and process requests
+// effectively one-at-a-time. Firing candidates concurrently at them leaves a
+// queued connection idling, which can hit an OS-level socket timeout. For these
+// we generate sequentially; cloud providers stay fully concurrent.
+const SEQUENTIAL_PROVIDERS: ReadonlySet<string> = new Set(["ollama"])
+
+function generationConcurrency(provider: string): number | "unbounded" {
+    return SEQUENTIAL_PROVIDERS.has(provider) ? 1 : "unbounded"
+}
+
 // ─── Main sampling loop ───────────────────────────────────────────────────────
 
 export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingResult, unknown> {
@@ -53,10 +63,12 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         const level = yield* Capability.detect(task.modelId)
         const temps = TEMP_SETS[level] ?? [0.5]
 
-        // Generate all candidates concurrently (no file I/O yet)
+        // Generate candidates (no file I/O yet). Concurrency is provider-aware:
+        // local single-instance servers (e.g. Ollama) run sequentially to avoid
+        // idle queued connections timing out; cloud providers run concurrently.
         const candidates = yield* Effect.all(
             temps.map(t => generateCandidate(task, t)),
-            { concurrency: "unbounded" },
+            { concurrency: generationConcurrency(task.model.provider) },
         )
 
         // Verify sequentially — each verification writes to actual project files,
