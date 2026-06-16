@@ -110,6 +110,56 @@ async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     return res
 }
 
+// ─── Transient-error retry ─────────────────────────────────────────────────────
+// Local model servers (e.g. Ollama) can drop the connection mid-generation
+// (ECONNRESET) or stall. Retry these transient failures with backoff so a single
+// flaky response doesn't abort the whole task. Deterministic failures (auth,
+// model-not-found, bad request) are NOT retried.
+
+const TRANSIENT_CODES: ReadonlySet<string> = new Set(["network_error", "timeout", "rate_limited"])
+
+function maxRetries(): number {
+    const raw = process.env.MDCODE_LLM_MAX_RETRIES
+    if (raw === undefined) return 2
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2
+}
+
+function isTransient(e: unknown): boolean {
+    if (e instanceof LLMError) return TRANSIENT_CODES.has(e.code)
+    const msg = e instanceof Error ? e.message : String(e)
+    return /ECONNRESET|socket connection was closed|ETIMEDOUT|EPIPE|ECONNREFUSED|fetch failed|timed out/i.test(msg)
+}
+
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+async function withRetry<T>(provider: string, fn: () => Promise<T>): Promise<T> {
+    const retries = maxRetries()
+    let lastErr: unknown
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await fn()
+        } catch (e) {
+            lastErr = e
+            if (!isTransient(e) || attempt === retries) {
+                throw e instanceof LLMError ? e : LLMError.from(e, provider)
+            }
+            await delay(Math.min(1000 * 2 ** attempt, 8000))
+        }
+    }
+    throw lastErr instanceof LLMError ? lastErr : LLMError.from(lastErr, provider)
+}
+
+async function fetchAndCollect(req: LLMRequest): Promise<LLMResponse> {
+    const route = resolveRoute(req)
+    const res = await doFetch(route, req)
+    const events: LLMEvent[] = []
+    for await (const line of readLines(res.body!)) {
+        events.push(...route.config.protocol.parseChunk(line))
+    }
+    return buildResponseFromEvents(events)
+}
+
 function buildResponseFromEvents(events: LLMEvent[]): LLMResponse {
     let text = ""
     const toolBuilders: Record<string, { name: string; inputJson: string }> = {}
@@ -154,28 +204,14 @@ function buildResponseFromEvents(events: LLMEvent[]): LLMResponse {
 export const LLM = {
     generate(req: LLMRequest): Effect.Effect<LLMResponse, LLMError> {
         return Effect.tryPromise({
-            try: async () => {
-                const route = resolveRoute(req)
-                const res = await doFetch(route, req)
-                const events: LLMEvent[] = []
-                for await (const line of readLines(res.body!)) {
-                    events.push(...route.config.protocol.parseChunk(line))
-                }
-                return buildResponseFromEvents(events)
-            },
+            try: () => withRetry(req.model.provider, () => fetchAndCollect(req)),
             catch: (e: unknown) => LLMError.from(e, req.model.provider),
         })
     },
 
     // Promise-based API — no Effect import needed in consuming code.
     async generateAsync(req: LLMRequest): Promise<LLMResponse> {
-        const route = resolveRoute(req)
-        const res = await doFetch(route, req)
-        const events: LLMEvent[] = []
-        for await (const line of readLines(res.body!)) {
-            events.push(...route.config.protocol.parseChunk(line))
-        }
-        return buildResponseFromEvents(events)
+        return withRetry(req.model.provider, () => fetchAndCollect(req))
     },
 
     async *stream(req: LLMRequest): AsyncIterable<LLMEvent> {

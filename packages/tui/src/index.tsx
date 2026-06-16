@@ -1,5 +1,5 @@
 import { createInterface } from "readline"
-import { Effect } from "effect"
+import { Effect, Cause } from "effect"
 import { Runner } from "@monkeydcode/engine/session/runner"
 import { initEngineSession, logUserToEngine, logAssistantToEngine, processWithEngine } from "./engine-session.ts"
 import { handle as orchestrate } from "@monkeydcode/agent/orchestrator"
@@ -45,13 +45,25 @@ const { model, modelId } = await loadTuiConfig()
 const runnerSession = Runner.createSession(process.cwd())
 const engineSession = await initEngineSession(process.cwd())
 
+/**
+ * Run the orchestrator and surface the *real* underlying error instead of
+ * Effect's generic "An error occurred in Effect.tryPromise" wrapper.
+ */
+async function orchestrateToReply(text: string): Promise<string> {
+    const exit = await Effect.runPromiseExit(orchestrate(text, model, modelId))
+    if (exit._tag === "Success") return exit.value
+    const squashed = Cause.squash(exit.cause)
+    if (squashed instanceof Error) throw squashed
+    throw new Error(typeof squashed === "string" ? squashed : Cause.pretty(exit.cause))
+}
+
 // ─── One-shot mode (mdc "do something") ───────────────────────────────────────
 if (cli.mode === "oneshot" && cli.task) {
     Runner.logMessage(runnerSession.id, "user", cli.task)
     await logUserToEngine(process.cwd(), engineSession.id, cli.task, model)
     const reply = echoMode
         ? await processWithEngine(process.cwd(), engineSession.id, cli.task, model)
-        : await Effect.runPromise(orchestrate(cli.task, model, modelId))
+        : await orchestrateToReply(cli.task)
     Runner.logMessage(runnerSession.id, "assistant", reply)
     await logAssistantToEngine(process.cwd(), engineSession.id, reply)
     console.log(reply)
@@ -90,7 +102,7 @@ async function runTask(text: string): Promise<void> {
 
         const reply = echoMode
             ? await processWithEngine(process.cwd(), engineSession.id, text, model)
-            : await Effect.runPromise(orchestrate(text, model, modelId))
+            : await orchestrateToReply(text)
 
         clearStatusLine()
         printAssistant()
