@@ -1,13 +1,18 @@
-import { createCliRenderer } from "@opentui/core"
-import { createRoot } from "@opentui/react"
+import { createInterface } from "readline"
 import { Effect } from "effect"
 import { Runner } from "@monkeydcode/engine/session/runner"
 import { initEngineSession, logUserToEngine, logAssistantToEngine, processWithEngine } from "./engine-session.ts"
 import { handle as orchestrate } from "@monkeydcode/agent/orchestrator"
+import { subscribe as subscribeStatus } from "@monkeydcode/agent/status"
 import { runModelSetupWizard } from "@monkeydcode/core/model-setup"
 import { loadTuiConfig } from "./config.ts"
-import { App } from "./App.tsx"
-import { parseArgv, printBanner, printHelp, runDoctor, printShellInit, VERSION } from "./cli.ts"
+import { parseArgv, printHelp, runDoctor, printShellInit, VERSION } from "./cli.ts"
+import { CREW, STATUS } from "./crew.ts"
+import {
+    R, BOLD, DIM, YELLOW, CYAN,
+    printHeader, printCrewRoster, printInteractiveHelp,
+    printStatus, clearStatusLine, printUser, printAssistant, printError,
+} from "./banner.ts"
 
 const echoMode = process.env.MDCODE_ECHO === "1"
 const cli = parseArgv(process.argv.slice(2))
@@ -36,41 +41,123 @@ switch (cli.mode) {
         break
 }
 
-const { config, model, modelId } = await loadTuiConfig()
+const { model, modelId } = await loadTuiConfig()
 const runnerSession = Runner.createSession(process.cwd())
 const engineSession = await initEngineSession(process.cwd())
 
+// ─── One-shot mode (mdc "do something") ───────────────────────────────────────
 if (cli.mode === "oneshot" && cli.task) {
     Runner.logMessage(runnerSession.id, "user", cli.task)
     await logUserToEngine(process.cwd(), engineSession.id, cli.task, model)
     const reply = echoMode
         ? await processWithEngine(process.cwd(), engineSession.id, cli.task, model)
-        : await (async () => {
-            await Effect.runPromise(orchestrate(cli.task!, model, modelId))
-            return "Task completed."
-        })()
+        : await Effect.runPromise(orchestrate(cli.task, model, modelId))
     Runner.logMessage(runnerSession.id, "assistant", reply)
     await logAssistantToEngine(process.cwd(), engineSession.id, reply)
     console.log(reply)
     process.exit(0)
 }
 
-printBanner()
-console.log(`  model: ${model.provider}/${model.id}`)
-console.log(`  cwd:   ${process.cwd()}`)
-console.log(`  tips:  /help in TUI · mdc setup · mdc "one-shot task"`)
-console.log("")
+// ─── Interactive Straw Hat UI ─────────────────────────────────────────────────
+printHeader(model, runnerSession.id)
+printStatus(STATUS.idle)
+process.stdout.write("\n\n")
 
-const renderer = await createCliRenderer()
-const root = createRoot(renderer)
+const rl = createInterface({ input: process.stdin, output: process.stdout })
 
-root.render(
-    <App
-        config={config}
-        model={model}
-        modelId={modelId}
-        runnerSessionId={runnerSession.id}
-        engineSessionId={engineSession.id}
-        echoMode={echoMode}
-    />,
-)
+let closed = false
+let busy = false
+rl.on("close", () => {
+    if (closed) return
+    closed = true
+    if (!busy) process.exit(0)
+})
+
+async function runTask(text: string): Promise<void> {
+    busy = true
+    printUser(text)
+    printStatus(STATUS.classify)
+
+    // Live crew status: show which agent is working and what it's doing.
+    const unsubscribe = subscribeStatus((s) => {
+        if (s.agent === "idle") return
+        printStatus(`${s.agent}: ${s.action}`)
+    })
+
+    try {
+        Runner.logMessage(runnerSession.id, "user", text)
+        await logUserToEngine(process.cwd(), engineSession.id, text, model)
+
+        const reply = echoMode
+            ? await processWithEngine(process.cwd(), engineSession.id, text, model)
+            : await Effect.runPromise(orchestrate(text, model, modelId))
+
+        clearStatusLine()
+        printAssistant()
+        console.log(`  ${reply}\n`)
+        console.log(`  ${DIM}${STATUS.done}${R}`)
+
+        Runner.logMessage(runnerSession.id, "assistant", reply)
+        await logAssistantToEngine(process.cwd(), engineSession.id, reply)
+    } catch (e) {
+        clearStatusLine()
+        const err = e instanceof Error ? e.message : String(e)
+        const friendly = /ollama: HTTP 500/i.test(err)
+            ? "Ollama crashed while serving the model. Try a smaller model or restart Ollama (`ollama serve`)."
+            : err
+        printError(friendly)
+    } finally {
+        unsubscribe()
+        busy = false
+        if (closed) process.exit(0)
+    }
+}
+
+function prompt(): void {
+    if (closed) return
+    rl.question(`${CYAN}>${R} `, async (raw: string) => {
+        const text = raw.trim()
+        if (!text) { prompt(); return }
+
+        switch (text) {
+            case "/exit":
+            case "/quit":
+                console.log(`\n${YELLOW}${BOLD}  🏴‍☠️  ${CREW.luffy.tagline}${R}`)
+                console.log(`${DIM}  Until next time, Nakama.${R}\n`)
+                rl.close()
+                process.exit(0)
+                return
+            case "/crew":
+                printCrewRoster()
+                prompt()
+                return
+            case "/help":
+                printInteractiveHelp(model, runnerSession.id)
+                prompt()
+                return
+            case "/model":
+                console.log(`\n  ${CYAN}${model.provider}/${model.id}${R}\n`)
+                prompt()
+                return
+            case "/setup":
+                await runModelSetupWizard()
+                console.log(`\n  ${DIM}Restart monkeyDcode to use the new model.${R}\n`)
+                prompt()
+                return
+            case "/clear":
+                printHeader(model, runnerSession.id)
+                prompt()
+                return
+            case "/status":
+                console.log(`\n  ${YELLOW}${STATUS.idle}${R}\n`)
+                prompt()
+                return
+        }
+
+        await runTask(text)
+        console.log()
+        prompt()
+    })
+}
+
+prompt()

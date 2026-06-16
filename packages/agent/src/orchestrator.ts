@@ -19,21 +19,29 @@ import * as WorkingMemory from "./working-memory.ts"
 
 const PROMPTS = join(fileURLToPath(import.meta.url), "../prompts")
 
-type Category = "bug_fix" | "feature" | "refactor" | "debug" | "general"
+type Category = "bug_fix" | "feature" | "refactor" | "debug" | "chat" | "general"
 
 let contextInitialized = false
 
-export function handle(message: string, model: ModelRef, modelId: string): Effect.Effect<void, unknown> {
+export function handle(message: string, model: ModelRef, modelId: string): Effect.Effect<string, unknown> {
     return Effect.gen(function* () {
-        if (!contextInitialized) {
-            yield* initSessionContext(process.cwd())
-            contextInitialized = true
-        }
-
         yield* WorkingMemory.setGoal(message)
         Status.emit({ agent: "luffy", action: "Classifying request..." })
 
         const category = yield* classify(message, model)
+
+        // Fast path: conversational input never touches the build/verify/review pipeline.
+        if (category === "chat") {
+            Status.emit({ agent: "luffy", action: "Replying..." })
+            const reply = yield* chatReply(message, model)
+            Status.emit({ agent: "idle", action: "Done" })
+            return reply
+        }
+
+        if (!contextInitialized) {
+            yield* initSessionContext(process.cwd())
+            contextInitialized = true
+        }
 
         switch (category) {
             case "bug_fix":
@@ -72,8 +80,15 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
         }
 
         // Full-changeset verification before review (plan/verification.md)
-        const srcFiles = yield* Effect.tryPromise(() => collectSourceFiles(process.cwd()))
         const diff = yield* Effect.tryPromise(() => getDiff())
+
+        // Nothing was changed on disk → skip the heavy verify + review pipeline.
+        if (diff === "No diff available") {
+            Status.emit({ agent: "idle", action: "Done" })
+            return `Done (${category}). No file changes were produced.`
+        }
+
+        const srcFiles = yield* Effect.tryPromise(() => collectSourceFiles(process.cwd()))
         Status.emit({ agent: "robin", action: "Verifying full changeset...", diff })
 
         if (srcFiles.length > 0) {
@@ -124,6 +139,31 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
         }
 
         Status.emit({ agent: "idle", action: "Done" })
+        const reviewed = criticalOrHigh.length > 0
+            ? ` Fixed ${criticalOrHigh.length} critical/high review issue(s).`
+            : " Review passed clean."
+        return `Done (${category}).${reviewed}`
+    })
+}
+
+function chatReply(message: string, model: ModelRef): Effect.Effect<string, unknown> {
+    return Effect.gen(function* () {
+        const response = yield* Effect.promise(() =>
+            LLM.generateAsync({
+                model,
+                messages: [
+                    {
+                        role: "system",
+                        content:
+                            "You are monkeyDcode, a friendly coding agent. Answer concisely. " +
+                            "If the user wants you to change code, tell them to describe the task " +
+                            "(e.g. \"fix the bug in auth.ts\" or \"add pagination to the users API\").",
+                    },
+                    { role: "user", content: message },
+                ],
+            }),
+        )
+        return response.text.trim()
     })
 }
 
@@ -142,8 +182,8 @@ function classify(message: string, model: ModelRef): Effect.Effect<Category, unk
             }),
         )
         const raw = response.text.trim().toLowerCase()
-        const valid: Category[] = ["bug_fix", "feature", "refactor", "debug", "general"]
-        return valid.find(c => raw.includes(c)) ?? "general"
+        const valid: Category[] = ["bug_fix", "feature", "refactor", "debug", "chat", "general"]
+        return valid.find(c => raw.includes(c)) ?? "chat"
     })
 }
 

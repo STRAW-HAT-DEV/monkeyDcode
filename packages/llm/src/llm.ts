@@ -43,6 +43,25 @@ function resolveRoute(req: LLMRequest): Route {
     return route
 }
 
+// Generous default so slow local models can finish; 0 disables the timeout.
+// Override with MDCODE_LLM_TIMEOUT_MS.
+const DEFAULT_LLM_TIMEOUT_MS = 600_000
+
+function resolveTimeoutMs(): number {
+    const raw = process.env.MDCODE_LLM_TIMEOUT_MS
+    if (raw === undefined) return DEFAULT_LLM_TIMEOUT_MS
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_LLM_TIMEOUT_MS
+}
+
+function isTimeoutError(e: unknown): boolean {
+    if (e instanceof DOMException && e.name === "TimeoutError") return true
+    if (e instanceof Error) {
+        return e.name === "TimeoutError" || /timed out|timeout|ETIMEDOUT/i.test(e.message)
+    }
+    return false
+}
+
 async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     const { protocol, baseUrl, apiKey, defaultHeaders = {} } = route.config
     const resolvedBase = LLMRuntime.getBaseUrl(route.provider, baseUrl)
@@ -51,7 +70,32 @@ async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     const headers = { ...defaultHeaders, ...protocol.buildHeaders(key) }
     const body = JSON.stringify(protocol.buildBody(req))
 
-    const res = await fetch(url, { method: "POST", headers, body })
+    const timeoutMs = resolveTimeoutMs()
+    const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
+
+    let res: Response
+    try {
+        res = await fetch(url, { method: "POST", headers, body, signal })
+    } catch (e) {
+        if (isTimeoutError(e)) {
+            throw new LLMError(
+                `${req.model.provider}: request timed out after ${timeoutMs}ms. ` +
+                    `The model may be too slow for this task — try a smaller/faster model, ` +
+                    `or raise the limit with MDCODE_LLM_TIMEOUT_MS.`,
+                "timeout",
+                req.model.provider,
+                undefined,
+                e,
+            )
+        }
+        throw new LLMError(
+            `${req.model.provider}: network error — ${e instanceof Error ? e.message : String(e)}`,
+            "network_error",
+            req.model.provider,
+            undefined,
+            e,
+        )
+    }
 
     if (!res.ok) {
         const text = await res.text().catch(() => `HTTP ${res.status}`)

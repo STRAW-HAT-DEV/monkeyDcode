@@ -13,6 +13,7 @@
         "./model-capability/detector": "./src/model-capability/detector.ts",
         "./model-capability/registry": "./src/model-capability/registry.ts",
         "./verification/pipeline": "./src/verification/pipeline.ts",
+        "./verification/stage-selector": "./src/verification/stage-selector.ts",
         "./verification/syntax": "./src/verification/syntax.ts",
         "./verification/load-config": "./src/verification/load-config.ts",
         "./verification/verify-tool": "./src/verification/verify-tool.ts"

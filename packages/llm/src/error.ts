@@ -4,6 +4,7 @@ export type LLMErrorCode =
     | "model_not_found"
     | "context_too_long"
     | "network_error"
+    | "timeout"
     | "parse_error"
     | "unknown"
 
