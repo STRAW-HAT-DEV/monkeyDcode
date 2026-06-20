@@ -1,10 +1,11 @@
 import { Route } from "../route.ts"
 import { RouteRegistry } from "../route-registry.ts"
+import { makeAnthropicHandler } from "../handlers/anthropic-sdk.ts"
 import { anthropicMessages } from "../protocols/anthropic-messages.ts"
 import { LLMRuntime } from "../runtime.ts"
 
 export const anthropic = Route.make("anthropic", {
-    protocol: anthropicMessages,
+    handler: makeAnthropicHandler(),
     baseUrl: "https://api.anthropic.com/v1",
     apiKey: () => LLMRuntime.getApiKey("anthropic", () => process.env["ANTHROPIC_API_KEY"]),
 })
