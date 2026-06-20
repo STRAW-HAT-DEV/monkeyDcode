@@ -1,14 +1,18 @@
 import { Effect } from "effect"
 import { LLM } from "@monkeydcode/llm"
-import type { ModelRef } from "@monkeydcode/llm"
+import type { Message, ModelRef } from "@monkeydcode/llm"
 import { readFile } from "fs/promises"
+import { relative } from "path"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { $ } from "bun"
 import * as Pipeline from "@monkeydcode/consistency/verification/pipeline"
+import * as Capability from "@monkeydcode/consistency/model-capability/detector"
 import { initSessionContext } from "@monkeydcode/context/session-init"
 import * as PlanAgent from "./plan-agent.ts"
 import * as BuildAgent from "./build-agent.ts"
+import * as Enhancer from "./prompt-enhancer.ts"
+import * as Scaffold from "./scaffold.ts"
 import * as ReviewAgent from "./review-agent.ts"
 import * as BugFix from "./sub-agents/bugfix.ts"
 import * as Feature from "./sub-agents/feature.ts"
@@ -16,6 +20,7 @@ import * as Refactor from "./sub-agents/refactor.ts"
 import * as Debug from "./sub-agents/debug.ts"
 import * as Status from "./status.ts"
 import * as WorkingMemory from "./working-memory.ts"
+import * as Changes from "./changes.ts"
 
 const PROMPTS = join(fileURLToPath(import.meta.url), "../prompts")
 
@@ -23,7 +28,12 @@ type Category = "bug_fix" | "feature" | "refactor" | "debug" | "chat" | "general
 
 let contextInitialized = false
 
-export function handle(message: string, model: ModelRef, modelId: string): Effect.Effect<string, unknown> {
+export function handle(
+    message: string,
+    model: ModelRef,
+    modelId: string,
+    history: Message[] = [],
+): Effect.Effect<string, unknown> {
     return Effect.gen(function* () {
         yield* WorkingMemory.setGoal(message)
         Status.emit({ agent: "luffy", action: "Classifying request..." })
@@ -31,12 +41,16 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
         const category = yield* classify(message, model)
 
         // Fast path: conversational input never touches the build/verify/review pipeline.
+        // History gives the agent memory of what it did in earlier turns.
         if (category === "chat") {
             Status.emit({ agent: "luffy", action: "Replying..." })
-            const reply = yield* chatReply(message, model)
+            const reply = yield* chatReply(message, model, history)
             Status.emit({ agent: "idle", action: "Done" })
             return reply
         }
+
+        // Reset the per-task write tracker so we can report exactly what changed.
+        Changes.reset()
 
         if (!contextInitialized) {
             yield* initSessionContext(process.cwd())
@@ -49,10 +63,14 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
                 yield* BugFix.fix({ error: message }, model, modelId)
                 break
 
-            case "feature":
-                Status.emit({ agent: "nami", action: "Charting feature plan..." })
-                yield* Feature.build(message, model, modelId)
+            case "feature": {
+                const scaffolded = yield* tryScaffold(message, model, modelId)
+                if (!scaffolded.handled) {
+                    Status.emit({ agent: "nami", action: "Charting feature plan..." })
+                    yield* Feature.build(scaffolded.task, model, modelId)
+                }
                 break
+            }
 
             case "refactor": {
                 const target = extractTarget(message)
@@ -67,48 +85,58 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
                 break
 
             default: {
-                Status.emit({ agent: "luffy", action: "Creating plan..." })
-                const plan = yield* PlanAgent.plan(message, model, modelId)
-                Status.emit({
-                    agent: "franky",
-                    action: `Executing ${plan.steps.length} steps (level ${plan.decompositionLevel})...`,
-                    plan,
-                    progress: { current: 0, total: plan.steps.length },
-                })
-                yield* BuildAgent.executePlan(plan, model, modelId)
+                const scaffolded = yield* tryScaffold(message, model, modelId)
+                if (!scaffolded.handled) {
+                    Status.emit({ agent: "luffy", action: "Creating plan..." })
+                    const plan = yield* PlanAgent.plan(scaffolded.task, model, modelId)
+                    Status.emit({
+                        agent: "franky",
+                        action: `Executing ${plan.steps.length} steps (level ${plan.decompositionLevel})...`,
+                        plan,
+                        progress: { current: 0, total: plan.steps.length },
+                    })
+                    yield* BuildAgent.executePlan(plan, model, modelId)
+                }
             }
         }
 
-        // Full-changeset verification before review (plan/verification.md)
-        const diff = yield* Effect.tryPromise(() => getDiff())
-
-        // Nothing was changed on disk → skip the heavy verify + review pipeline.
-        if (diff === "No diff available") {
+        // Source of truth for "did anything change": files actually written this
+        // task. Works in non-git folders and detects brand-new untracked files —
+        // unlike `git diff`, which silently shows nothing in both cases.
+        const changed = Changes.take()
+        if (changed.length === 0) {
             Status.emit({ agent: "idle", action: "Done" })
             return `Done (${category}). No file changes were produced.`
         }
 
-        const srcFiles = yield* Effect.tryPromise(() => collectSourceFiles(process.cwd()))
-        Status.emit({ agent: "robin", action: "Verifying full changeset...", diff })
+        const fileList = formatFileList(changed)
 
-        if (srcFiles.length > 0) {
-            const fullVerify = yield* Effect.tryPromise(() => Pipeline.run(srcFiles, process.cwd()))
-            if (!fullVerify.passed) {
-                Status.emit({
-                    agent: "franky",
-                    action: `Fixing verification failures before review (${fullVerify.stage})...`,
-                })
-                yield* BuildAgent.executePlan({
-                    steps: [{
-                        description: `Fix verification failures:\n${Pipeline.formatErrors(fullVerify)}`,
-                        targetFiles: srcFiles.slice(0, 5),
-                        changeType: "modify",
-                        dependencies: [],
-                        verificationCriteria: "Full verification pipeline passes",
-                    }],
-                    decompositionLevel: 1,
-                }, model, modelId)
-            }
+        // Verify just the files we touched (faster + more relevant than whole-repo).
+        Status.emit({ agent: "robin", action: `Verifying ${changed.length} changed file(s)...` })
+        const fullVerify = yield* Effect.tryPromise(() => Pipeline.run(changed, process.cwd()))
+        if (!fullVerify.passed) {
+            Status.emit({
+                agent: "franky",
+                action: `Fixing verification failures (${fullVerify.stage})...`,
+            })
+            yield* BuildAgent.executePlan({
+                steps: [{
+                    description: `Fix verification failures:\n${Pipeline.formatErrors(fullVerify)}`,
+                    targetFiles: changed.slice(0, 5),
+                    changeType: "modify",
+                    dependencies: [],
+                    verificationCriteria: "Full verification pipeline passes",
+                }],
+                decompositionLevel: 1,
+            }, model, modelId)
+        }
+
+        // Actor-Critic review needs a git diff for context; skip cleanly when the
+        // project isn't a git repo (common for fresh scaffolds in empty folders).
+        const diff = yield* Effect.tryPromise(() => getDiff())
+        if (diff === "No diff available") {
+            Status.emit({ agent: "idle", action: "Done" })
+            return `Done (${category}). Created/updated ${changed.length} file(s):\n${fileList}`
         }
 
         Status.emit({ agent: "robin", action: "Running Actor-Critic review...", diff })
@@ -140,14 +168,67 @@ export function handle(message: string, model: ModelRef, modelId: string): Effec
 
         Status.emit({ agent: "idle", action: "Done" })
         const reviewed = criticalOrHigh.length > 0
-            ? ` Fixed ${criticalOrHigh.length} critical/high review issue(s).`
-            : " Review passed clean."
-        return `Done (${category}).${reviewed}`
+            ? `Fixed ${criticalOrHigh.length} critical/high review issue(s).`
+            : "Review passed clean."
+        return `Done (${category}). ${reviewed}\nCreated/updated ${changed.length} file(s):\n${fileList}`
     })
 }
 
-function chatReply(message: string, model: ModelRef): Effect.Effect<string, unknown> {
+function formatFileList(files: string[]): string {
+    const root = process.cwd()
+    return files
+        .map(f => {
+            const rel = relative(root, f)
+            return `  • ${rel && !rel.startsWith("..") ? rel : f}`
+        })
+        .join("\n")
+}
+
+interface ScaffoldOutcome {
+    /** True when a deterministic scaffold was built and executed. */
+    handled: boolean
+    /** Capability-enhanced task spec, used by the planner when not handled. */
+    task: string
+}
+
+/**
+ * Enhance the request into a precise spec, then — for task types with a known
+ * single-artifact shape (e.g. a web page) — build it directly via a tight
+ * scaffold instead of the generic planner. Returns the enhanced task so callers
+ * can fall back to planning when no scaffold applies.
+ */
+function tryScaffold(
+    message: string,
+    model: ModelRef,
+    modelId: string,
+): Effect.Effect<ScaffoldOutcome, unknown> {
     return Effect.gen(function* () {
+        const level = yield* Capability.detect(model)
+        const spec = Enhancer.enhance({ rawTask: message, capabilityLevel: level })
+        const scaffold = Scaffold.scaffoldFor(spec, process.cwd())
+
+        if (!scaffold) return { handled: false, task: spec.task }
+
+        const plan = Scaffold.toPlan(scaffold, level)
+        Status.emit({
+            agent: "franky",
+            action: `Scaffolding ${spec.taskType.replace("_", " ")} (${plan.steps.length} file(s))...`,
+            plan,
+            progress: { current: 0, total: plan.steps.length },
+        })
+        yield* BuildAgent.executePlan(plan, model, modelId)
+        return { handled: true, task: spec.task }
+    })
+}
+
+function chatReply(
+    message: string,
+    model: ModelRef,
+    history: Message[] = [],
+): Effect.Effect<string, unknown> {
+    return Effect.gen(function* () {
+        // Keep the tail of the conversation so the agent remembers what it just did.
+        const recent = history.slice(-20)
         const response = yield* Effect.promise(() =>
             LLM.generateAsync({
                 model,
@@ -156,9 +237,11 @@ function chatReply(message: string, model: ModelRef): Effect.Effect<string, unkn
                         role: "system",
                         content:
                             "You are monkeyDcode, a friendly coding agent. Answer concisely. " +
-                            "If the user wants you to change code, tell them to describe the task " +
-                            "(e.g. \"fix the bug in auth.ts\" or \"add pagination to the users API\").",
+                            "Use the prior conversation to remember files you created or changed " +
+                            "and how to run them. If the user wants you to change code, tell them " +
+                            "to describe the task (e.g. \"fix the bug in auth.ts\").",
                     },
+                    ...recent,
                     { role: "user", content: message },
                 ],
             }),
@@ -196,15 +279,4 @@ async function getDiff(): Promise<string> {
     const r = await $`git diff HEAD`.quiet().nothrow()
     const staged = await $`git diff --cached HEAD`.quiet().nothrow()
     return (r.stdout.toString() + staged.stdout.toString()).trim() || "No diff available"
-}
-
-async function collectSourceFiles(root: string): Promise<string[]> {
-    const glob = new Bun.Glob("**/*.{ts,tsx,js,jsx,py,rs,go}")
-    const files: string[] = []
-    for await (const f of glob.scan({ cwd: root, absolute: true })) {
-        if (!f.includes("node_modules") && !f.includes(".git") && !f.includes("dist")) {
-            files.push(f)
-        }
-    }
-    return files.slice(0, 50)
 }

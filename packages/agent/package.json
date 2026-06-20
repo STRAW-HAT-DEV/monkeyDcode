@@ -12,7 +12,10 @@
         "./registry": "./src/registry.ts",
         "./react": "./src/react.ts",
         "./status": "./src/status.ts",
-        "./working-memory": "./src/working-memory.ts"
+        "./working-memory": "./src/working-memory.ts",
+        "./task-type": "./src/task-type.ts",
+        "./prompt-enhancer": "./src/prompt-enhancer.ts",
+        "./scaffold": "./src/scaffold.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

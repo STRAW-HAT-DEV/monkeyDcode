@@ -7,7 +7,8 @@ test("capability registry knows qwen 7b as level 6", () => {
 })
 
 test("capability registry knows claude opus as level 1", () => {
-    expect(lookup("claude-opus-4-8")).toBeNull() // unknown id ok
+    // Prefix matching resolves versioned ids to their known family capability.
+    expect(lookup("claude-opus-4-8")).toBe(1)
     expect(lookup("claude-opus-4")).toBe(1)
 })
 

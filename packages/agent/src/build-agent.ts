@@ -1,6 +1,7 @@
 import { Effect } from "effect"
-import { readFile, writeFile } from "fs/promises"
-import { basename, extname } from "path"
+import { readFile, writeFile, mkdir } from "fs/promises"
+import { existsSync } from "fs"
+import { basename, extname, dirname } from "path"
 import * as Sampler from "@monkeydcode/consistency/sampler"
 import * as Retriever from "@monkeydcode/context/retriever"
 import * as Capability from "@monkeydcode/consistency/model-capability/detector"
@@ -16,6 +17,7 @@ import type { Plan, PlanStep } from "./plan-agent.ts"
 import type { ModelRef } from "@monkeydcode/llm"
 import * as WorkingMemory from "./working-memory.ts"
 import * as Status from "./status.ts"
+import * as Changes from "./changes.ts"
 import { assertCanWrite } from "./registry.ts"
 import { wrapReAct } from "./react.ts"
 
@@ -50,7 +52,7 @@ export function executePlan(plan: Plan, model: ModelRef, modelId: string): Effec
 function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: number): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
         assertCanWrite("build")
-        const capabilityLevel = yield* Capability.detect(modelId)
+        const capabilityLevel = yield* Capability.detect(model)
 
         const context = yield* Retriever.retrieve(
             { files: step.targetFiles, description: step.description },
@@ -100,6 +102,13 @@ ${fileList}`
 
 // ─── applyChange ─────────────────────────────────────────────────────────────
 
+/** Write a file, creating any missing parent directories (supports new files). */
+async function writeFileEnsuringDir(path: string, content: string): Promise<void> {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, content, "utf-8")
+    Changes.recordWrite(path)
+}
+
 export function applyChange(change: string, targetFiles: string[]): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
         const hashlinePatches = extractHashlinePatches(change)
@@ -118,7 +127,7 @@ export function applyChange(change: string, targetFiles: string[]): Effect.Effec
         if (blocks.length === 0) {
             // No code blocks at all — write raw response to single-file target
             if (targetFiles.length === 1 && targetFiles[0]) {
-                yield* Effect.tryPromise(() => writeFile(targetFiles[0]!, change.trim()))
+                yield* Effect.tryPromise(() => writeFileEnsuringDir(targetFiles[0]!, change.trim()))
             }
             return
         }
@@ -126,7 +135,7 @@ export function applyChange(change: string, targetFiles: string[]): Effect.Effec
         if (targetFiles.length === 1 && targetFiles[0]) {
             // Single target: use the best matching block, fall back to first
             const best = matchBlockToFile(blocks, targetFiles[0]) ?? blocks[0]!.code
-            yield* Effect.tryPromise(() => writeFile(targetFiles[0]!, best))
+            yield* Effect.tryPromise(() => writeFileEnsuringDir(targetFiles[0]!, best))
             return
         }
 
@@ -135,7 +144,7 @@ export function applyChange(change: string, targetFiles: string[]): Effect.Effec
         for (const targetFile of targetFiles) {
             const code = matchBlockToFile(blocks, targetFile)
             if (code !== null) {
-                yield* Effect.tryPromise(() => writeFile(targetFile, code))
+                yield* Effect.tryPromise(() => writeFileEnsuringDir(targetFile, code))
             } else {
                 unmatched.push(targetFile)
             }
@@ -143,7 +152,7 @@ export function applyChange(change: string, targetFiles: string[]): Effect.Effec
 
         // Fallback: if exactly one block remains unassigned and one file unmatched, pair them
         if (unmatched.length === 1 && blocks.length === 1) {
-            yield* Effect.tryPromise(() => writeFile(unmatched[0]!, blocks[0]!.code))
+            yield* Effect.tryPromise(() => writeFileEnsuringDir(unmatched[0]!, blocks[0]!.code))
         }
     })
 }
@@ -175,11 +184,33 @@ function resolvePatchPath(patch: string, targetFiles: string[]): string | undefi
     return targetFiles[0]
 }
 
+/**
+ * Reconstruct file content from a hashline patch body when the target file does
+ * not exist yet. A hashline patch is an *edit*; if the model emits one for a new
+ * file, its `+` body lines are the intended file content.
+ */
+function contentFromPatchBody(patch: string): string {
+    return patch
+        .split("\n")
+        .filter(l => l.startsWith("+"))
+        .map(l => l.slice(1))
+        .join("\n")
+}
+
 function applyHashlinePatches(patches: string[], targetFiles: string[]): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
         for (const patch of patches) {
             const targetFile = resolvePatchPath(patch, targetFiles)
             if (!targetFile) continue
+
+            // New file: a hashline edit can't apply to nothing — create it from
+            // the patch body instead of failing with ENOENT.
+            if (!existsSync(targetFile)) {
+                yield* Effect.tryPromise(() =>
+                    writeFileEnsuringDir(targetFile, contentFromPatchBody(patch)),
+                )
+                continue
+            }
 
             const existing = yield* Effect.tryPromise(() => readFile(targetFile, "utf-8"))
             const relPath = targetFile.replace(/\\/g, "/")
@@ -204,7 +235,7 @@ function applyHashlinePatches(patches: string[], targetFiles: string[]): Effect.
                 )
             }
 
-            yield* Effect.tryPromise(() => writeFile(targetFile, result.content!, "utf-8"))
+            yield* Effect.tryPromise(() => writeFileEnsuringDir(targetFile, result.content!))
         }
     })
 }
