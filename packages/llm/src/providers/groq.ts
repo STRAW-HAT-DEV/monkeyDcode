@@ -6,6 +6,13 @@ export const groq = Route.make("groq", {
     handler: makeOpenAICompatHandler("groq", "https://api.groq.com/openai/v1"),
     baseUrl: "https://api.groq.com/openai/v1",
     apiKey: () => process.env["GROQ_API_KEY"],
+import { openAIChat } from "../protocols/openai-chat.ts"
+import { LLMRuntime } from "../runtime.ts"
+
+export const groq = Route.make("groq", {
+    protocol: openAIChat,
+    baseUrl: "https://api.groq.com/openai/v1",
+    apiKey: () => LLMRuntime.getApiKey("groq", () => process.env["GROQ_API_KEY"]),
 })
 
 RouteRegistry.register(groq)
