@@ -1,7 +1,7 @@
 import { Effect } from "effect"
-import { readFile, writeFile } from "fs/promises"
+import { readFile, writeFile, mkdir, rm } from "fs/promises"
 import { existsSync } from "fs"
-import { basename, extname } from "path"
+import { basename, extname, dirname } from "path"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
 import * as Pipeline from "./verification/pipeline.ts"
@@ -60,7 +60,7 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         const config = yield* Effect.tryPromise(() => loadConfig())
         const maxRetries = config.consistency.maxRetries
 
-        const level = yield* Capability.detect(task.modelId)
+        const level = yield* Capability.detect(task.model)
         const temps = TEMP_SETS[level] ?? [0.5]
 
         // Generate candidates (no file I/O yet). Concurrency is provider-aware:
@@ -140,10 +140,13 @@ function verifyCandidate(candidate: Candidate, files: string[]): Effect.Effect<C
             const verification = await Pipeline.run(files, projectRoot)
             return { ...candidate, verification }
         } finally {
-            // 4. Always restore originals, whether pipeline passed, failed, or threw
+            // 4. Always restore originals, whether pipeline passed, failed, or threw.
+            //    Files that didn't exist before are removed so the pre-verification
+            //    state is fully restored (the final applyChange recreates them).
             await Promise.all(
                 originals.map(async ({ file, content }) => {
                     if (content !== null) await writeFile(file, content)
+                    else if (existsSync(file)) await rm(file, { force: true })
                 })
             )
         }
@@ -166,20 +169,26 @@ function detectProjectRoot(files: string[]): string {
 
 // ─── Code extraction (write generated code to target files) ───────────────────
 
+/** Write a file, creating any missing parent directories (supports new files). */
+async function writeFileEnsuringDir(path: string, content: string): Promise<void> {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, content)
+}
+
 async function applyGeneratedCode(change: string, targetFiles: string[]): Promise<void> {
     const blocks = extractCodeBlocks(change)
 
     if (blocks.length === 0) {
         // No code fences — write raw text to single-file target
         if (targetFiles.length === 1 && targetFiles[0]) {
-            await writeFile(targetFiles[0], change.trim())
+            await writeFileEnsuringDir(targetFiles[0], change.trim())
         }
         return
     }
 
     if (targetFiles.length === 1 && targetFiles[0]) {
         const best = matchBlockToFile(blocks, targetFiles[0]) ?? blocks[0]!.code
-        await writeFile(targetFiles[0], best)
+        await writeFileEnsuringDir(targetFiles[0], best)
         return
     }
 
@@ -187,13 +196,13 @@ async function applyGeneratedCode(change: string, targetFiles: string[]): Promis
     const unmatched: string[] = []
     for (const f of targetFiles) {
         const code = matchBlockToFile(blocks, f)
-        if (code !== null) await writeFile(f, code)
+        if (code !== null) await writeFileEnsuringDir(f, code)
         else unmatched.push(f)
     }
 
     // Fallback: one remaining unmatched file + one remaining block
     if (unmatched.length === 1 && blocks.length === 1) {
-        await writeFile(unmatched[0]!, blocks[0]!.code)
+        await writeFileEnsuringDir(unmatched[0]!, blocks[0]!.code)
     }
 }
 

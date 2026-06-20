@@ -46,15 +46,64 @@ const runnerSession = Runner.createSession(process.cwd())
 const engineSession = await initEngineSession(process.cwd())
 
 /**
+ * Drill through wrapper errors (Effect's UnknownException, AggregateError, and
+ * `cause` chains) to the root error that actually explains the failure.
+ */
+function rootCause(e: unknown): unknown {
+    let current = e
+    const seen = new Set<unknown>()
+    while (current && typeof current === "object" && !seen.has(current)) {
+        seen.add(current)
+        const c = current as { error?: unknown; cause?: unknown; errors?: unknown[] }
+        const next =
+            c.error ??
+            c.cause ??
+            (Array.isArray(c.errors) ? c.errors[0] : undefined)
+        if (next === undefined || next === current) break
+        current = next
+    }
+    return current
+}
+
+/** Add an actionable hint for common, recoverable failure modes. */
+function friendlyError(err: string): string {
+    if (/ECONNRESET|socket connection was closed|HTTP 500/i.test(err)) {
+        return `${err}\n  → The local model server dropped the connection (it likely ran out of memory on a large generation). ` +
+            `Restart it (\`ollama serve\`), try a smaller/simpler task, or use a stronger model via /setup.`
+    }
+    if (/ECONNREFUSED|Unable to connect|network error/i.test(err)) {
+        return `${err}\n  → Can't reach the model server. Is it running? Start it with \`ollama serve\`, or check /model.`
+    }
+    if (/\[timeout\]|timed out/i.test(err)) {
+        return `${err}\n  → The model was too slow. Try a smaller model, a simpler task, or raise MDCODE_LLM_TIMEOUT_MS.`
+    }
+    if (/\[rate_limited\]|HTTP 429|rate limit/i.test(err)) {
+        return `${err}\n  → Hit the provider's rate limit (free tiers are small). It auto-retries, but for big tasks ` +
+            `try a smaller request, wait a minute, or upgrade your plan / use a different provider via /setup.`
+    }
+    return err
+}
+
+/** Human-readable message for the deepest meaningful error. */
+function describeError(e: unknown): string {
+    const root = rootCause(e)
+    const code = (root as { code?: string })?.code
+    if (root instanceof Error) return code ? `[${code}] ${root.message}` : root.message
+    if (typeof root === "string") return root
+    return String(root)
+}
+
+/**
  * Run the orchestrator and surface the *real* underlying error instead of
  * Effect's generic "An error occurred in Effect.tryPromise" wrapper.
  */
 async function orchestrateToReply(text: string): Promise<string> {
-    const exit = await Effect.runPromiseExit(orchestrate(text, model, modelId))
+    // Prior turns (the current user message is already logged, so drop the tail)
+    // give the agent memory of what it built earlier in this session.
+    const history = Runner.getHistory(runnerSession.id).slice(0, -1)
+    const exit = await Effect.runPromiseExit(orchestrate(text, model, modelId, history))
     if (exit._tag === "Success") return exit.value
-    const squashed = Cause.squash(exit.cause)
-    if (squashed instanceof Error) throw squashed
-    throw new Error(typeof squashed === "string" ? squashed : Cause.pretty(exit.cause))
+    throw new Error(describeError(Cause.squash(exit.cause)))
 }
 
 // ─── One-shot mode (mdc "do something") ───────────────────────────────────────
@@ -113,11 +162,7 @@ async function runTask(text: string): Promise<void> {
         await logAssistantToEngine(process.cwd(), engineSession.id, reply)
     } catch (e) {
         clearStatusLine()
-        const err = e instanceof Error ? e.message : String(e)
-        const friendly = /ollama: HTTP 500/i.test(err)
-            ? "Ollama crashed while serving the model. Try a smaller model or restart Ollama (`ollama serve`)."
-            : err
-        printError(friendly)
+        printError(friendlyError(e instanceof Error ? e.message : String(e)))
     } finally {
         unsubscribe()
         busy = false

@@ -120,15 +120,37 @@ const TRANSIENT_CODES: ReadonlySet<string> = new Set(["network_error", "timeout"
 
 function maxRetries(): number {
     const raw = process.env.MDCODE_LLM_MAX_RETRIES
-    if (raw === undefined) return 2
+    if (raw === undefined) return 4
     const parsed = Number(raw)
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 4
 }
 
 function isTransient(e: unknown): boolean {
     if (e instanceof LLMError) return TRANSIENT_CODES.has(e.code)
     const msg = e instanceof Error ? e.message : String(e)
     return /ECONNRESET|socket connection was closed|ETIMEDOUT|EPIPE|ECONNREFUSED|fetch failed|timed out/i.test(msg)
+}
+
+/** Provider-suggested wait (ms) for a rate-limit error, parsed from the message. */
+function suggestedRetryMs(e: unknown): number | undefined {
+    const msg = e instanceof Error ? e.message : String(e)
+    // e.g. "Please try again in 6.635s" or "retry-after: 2"
+    const m = /try again in ([\d.]+)\s*(ms|s)?|retry[-\s]?after["':\s]+([\d.]+)/i.exec(msg)
+    if (!m) return undefined
+    if (m[1]) {
+        const n = parseFloat(m[1])
+        return Math.ceil(m[2] === "ms" ? n : n * 1000)
+    }
+    if (m[3]) return Math.ceil(parseFloat(m[3]) * 1000)
+    return undefined
+}
+
+function backoffMs(e: unknown, attempt: number): number {
+    // Honor the server's requested delay for rate limits (+250ms buffer);
+    // otherwise exponential backoff.
+    const suggested = suggestedRetryMs(e)
+    if (suggested !== undefined) return Math.min(suggested + 250, 60_000)
+    return Math.min(1000 * 2 ** attempt, 8000)
 }
 
 const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
@@ -144,7 +166,7 @@ async function withRetry<T>(provider: string, fn: () => Promise<T>): Promise<T> 
             if (!isTransient(e) || attempt === retries) {
                 throw e instanceof LLMError ? e : LLMError.from(e, provider)
             }
-            await delay(Math.min(1000 * 2 ** attempt, 8000))
+            await delay(backoffMs(e, attempt))
         }
     }
     throw lastErr instanceof LLMError ? lastErr : LLMError.from(lastErr, provider)

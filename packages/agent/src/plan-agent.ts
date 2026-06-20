@@ -47,7 +47,7 @@ export interface Plan {
 
 export function plan(task: string, model: ModelRef, modelId: string): Effect.Effect<Plan, unknown> {
     return Effect.gen(function* () {
-        const level = yield* Capability.detect(modelId)
+        const level = yield* Capability.detect(model)
         const promptTemplate = yield* loadPrompt(level)
         const filledPrompt = wrapReAct(promptTemplate.replace("{TASK}", task))
 

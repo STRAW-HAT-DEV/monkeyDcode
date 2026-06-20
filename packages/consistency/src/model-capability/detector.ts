@@ -51,13 +51,23 @@ export async function recordPassRate(modelId: string, passed: boolean): Promise<
     await writeStats(stats)
 }
 
+/**
+ * Legacy fallback when only a model id (no provider) is available. Prefer
+ * passing a ModelRef so the configured provider is used instead of a guess.
+ */
 function modelRefFromId(modelId: string): ModelRef {
     if (modelId.startsWith("claude-")) return anthropic.model(modelId)
-    if (modelId.includes(":")) return ollama.model(modelId)
     return ollama.model(modelId)
 }
 
-export function detect(modelId: string): Effect.Effect<CapabilityLevel, unknown> {
+/**
+ * Detect a model's capability level. Accepts the resolved ModelRef (preferred,
+ * so the correct provider is used for the benchmark probe) or a bare model id
+ * (legacy; provider is guessed).
+ */
+export function detect(model: ModelRef | string): Effect.Effect<CapabilityLevel, unknown> {
+    const modelRef = typeof model === "string" ? modelRefFromId(model) : model
+    const modelId = modelRef.id
     return Effect.gen(function* () {
         const known = lookup(modelId)
         if (known !== null) {
@@ -71,8 +81,7 @@ export function detect(modelId: string): Effect.Effect<CapabilityLevel, unknown>
             return adjustLevel(modelId, cache[modelId]!, stats[modelId] ?? { attempts: 0, passes: 0 })
         }
 
-        const model = modelRefFromId(modelId)
-        const level = yield* runBenchmark(model)
+        const level = yield* runBenchmark(modelRef)
         yield* Effect.tryPromise(() => writeCache({ ...cache, [modelId]: level }))
         return level
     })

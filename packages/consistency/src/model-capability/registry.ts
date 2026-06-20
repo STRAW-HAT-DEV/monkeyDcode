@@ -11,18 +11,29 @@ export const KNOWN_MODELS: Record<string, CapabilityLevel> = {
 
     // Level 3: Medium
     "qwen2.5-coder:72b": 3, "qwen2.5-coder:32b": 3,
-    "llama-3.3-70b": 3, "mistral-large": 3,
+    "llama-3.3-70b": 3, "llama-3.3-70b-versatile": 3, "mistral-large": 3,
 
     // Level 4
     "deepseek-coder:33b": 4,
 
     // Level 5
     "qwen2.5-coder:14b": 5, "codellama:13b": 5,
+    "llama-3.1-8b-instant": 5,
 
     // Level 6
     "qwen2.5-coder:7b": 6, "deepseek-coder:6.7b": 6, "codellama:7b": 6,
 }
 
 export function lookup(modelId: string): CapabilityLevel | null {
-    return KNOWN_MODELS[modelId] ?? null
+    if (KNOWN_MODELS[modelId] !== undefined) return KNOWN_MODELS[modelId]!
+
+    // Fallback: match a known model that is a prefix of the requested id
+    // (e.g. "llama-3.3-70b-versatile" → "llama-3.3-70b"). Use the longest match.
+    let best: { key: string; level: CapabilityLevel } | null = null
+    for (const [key, level] of Object.entries(KNOWN_MODELS)) {
+        if (modelId.startsWith(key) && (!best || key.length > best.key.length)) {
+            best = { key, level }
+        }
+    }
+    return best?.level ?? null
 }
