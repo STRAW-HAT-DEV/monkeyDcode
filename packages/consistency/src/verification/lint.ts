@@ -3,7 +3,21 @@ import { existsSync } from "fs"
 import { join } from "path"
 import type { StageResult, VerificationError } from "./types.ts"
 
-export async function check(files: string[], projectRoot: string): Promise<StageResult> {
+import { runWithTimeout } from "./utils.ts"
+
+export async function check(files: string[], projectRoot: string, timeoutMs = 15_000): Promise<StageResult> {
+    return runWithTimeout(
+        () => checkInner(files, projectRoot),
+        timeoutMs,
+        () => ({
+            passed: false,
+            errors: [{ file: projectRoot, line: 0, message: `Lint timed out after ${timeoutMs}ms`, severity: "error" }],
+            durationMs: timeoutMs,
+        }),
+    )
+}
+
+async function checkInner(files: string[], projectRoot: string): Promise<StageResult> {
     const start = Date.now()
     const errors: VerificationError[] = []
 
@@ -34,6 +48,35 @@ export async function check(files: string[], projectRoot: string): Promise<Stage
         const r = await $`python3 -m ruff check --output-format json ${pyFiles}`.quiet().nothrow()
         if (r.exitCode !== 0 && !r.stderr.toString().includes("No module named ruff")) {
             errors.push(...parseRuffErrors(r.stdout.toString()))
+        }
+    }
+
+    const rsFiles = files.filter(f => f.endsWith(".rs"))
+    const goFiles = files.filter(f => f.endsWith(".go"))
+
+    if (rsFiles.length > 0 && existsSync(join(projectRoot, "Cargo.toml"))) {
+        const r = await $`cargo clippy --quiet -- -D warnings`.cwd(projectRoot).quiet().nothrow()
+        if (r.exitCode !== 0) {
+            errors.push({
+                file: projectRoot,
+                line: 0,
+                message: r.stderr.toString().slice(0, 500) || "clippy failed",
+                severity: "error",
+                rule: "clippy",
+            })
+        }
+    }
+
+    if (goFiles.length > 0 && existsSync(join(projectRoot, "go.mod"))) {
+        const r = await $`golangci-lint run ./...`.cwd(projectRoot).quiet().nothrow()
+        if (r.exitCode !== 0 && !r.stderr.toString().includes("not found")) {
+            errors.push({
+                file: projectRoot,
+                line: 0,
+                message: r.stderr.toString().slice(0, 500) || "golangci-lint failed",
+                severity: "error",
+                rule: "golangci-lint",
+            })
         }
     }
 

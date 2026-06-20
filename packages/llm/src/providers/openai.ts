@@ -1,9 +1,9 @@
 import { Route } from "../route.ts"
 import { RouteRegistry } from "../route-registry.ts"
-import { openAIChat } from "../protocols/openai-chat.ts"
+import { makeOpenAIHandler } from "../handlers/openai-sdk.ts"
 
 export const openai = Route.make("openai", {
-    protocol: openAIChat,
+    handler: makeOpenAIHandler(),
     baseUrl: "https://api.openai.com/v1",
     apiKey: () => process.env["OPENAI_API_KEY"],
 })

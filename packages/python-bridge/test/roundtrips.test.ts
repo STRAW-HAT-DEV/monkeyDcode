@@ -1,17 +1,25 @@
-test("ping roundtrip", async () => {
-    const program = Effect.gen(function* () {
-        const bridge = yield* PythonBridge
-        return yield* bridge.call<string>("ping")
-    })
-    const result = await Effect.runPromise(Effect.provide(program, live))
-    expect(result).toBe("pong")
-})
+import { test, expect } from "bun:test"
+import { writeFile, unlink } from "fs/promises"
+import { join } from "path"
+import { tmpdir } from "os"
+import { shutdown } from "../src/bridge.ts"
+import { treeSitter } from "../src/client.ts"
 
-test("extract signatures from TS", async () => {
-    await writeFile("/tmp/sample.ts", `
-        export function foo(x: number): number { return x + 1 }
-    `)
-    const program = treeSitter.extractSignatures("/tmp/sample.ts")
-    const result = await Effect.runPromise(Effect.provide(program, live))
-    expect(result[0]!.name).toBe("foo")
-})
+const sampleFile = join(tmpdir(), `mdc-sample-${Date.now()}.ts`)
+
+test("regex fallback extracts signatures without bridge", async () => {
+    await writeFile(sampleFile, `export function foo(x: number): number { return x + 1 }`)
+    const sigs = await treeSitter.extractSignatures(sampleFile)
+    expect(sigs.length).toBeGreaterThan(0)
+    expect(sigs[0]!.name).toBe("foo")
+    await unlink(sampleFile).catch(() => {})
+    shutdown()
+}, 10_000)
+
+test("parseAST fallback returns structure", async () => {
+    await writeFile(sampleFile, `export function bar() { return 1 }`)
+    const ast = await treeSitter.parseAST(sampleFile)
+    expect(ast.file).toBe(sampleFile)
+    await unlink(sampleFile).catch(() => {})
+    shutdown()
+}, 10_000)

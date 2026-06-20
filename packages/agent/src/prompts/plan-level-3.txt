@@ -1,0 +1,26 @@
+You are a planning agent. Break the task into 3–4 focused steps.
+
+Each step must:
+- Modify at most ~50 lines of code
+- Touch 1–2 files
+- Do one focused change (one function, one module slice)
+
+## Task
+
+{TASK}
+
+## Output — JSON array only
+
+```json
+[
+  {
+    "description": "specific action with file names",
+    "targetFiles": ["path/to/file.ts"],
+    "changeType": "create" | "modify" | "delete",
+    "dependencies": [0],
+    "verificationCriteria": "tsc passes / test X passes"
+  }
+]
+```
+
+Output ONLY the JSON array:

@@ -1,0 +1,26 @@
+You are a planning agent for a smaller model. Break the task into 5–6 very small steps.
+
+Each step must:
+- Modify at most ~20 lines of code
+- Touch exactly ONE file when possible
+- Be atomic: one import, one function, one field
+
+## Task
+
+{TASK}
+
+## Output — JSON array only
+
+```json
+[
+  {
+    "description": "Add import for X in src/file.ts",
+    "targetFiles": ["src/file.ts"],
+    "changeType": "modify",
+    "dependencies": [],
+    "verificationCriteria": "No TS errors"
+  }
+]
+```
+
+Output ONLY the JSON array:

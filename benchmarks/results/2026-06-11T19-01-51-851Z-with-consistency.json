@@ -1,0 +1,102 @@
+[
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "01-add-pagination",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 838,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "02-fix-off-by-one",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 273,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "03-add-error-handling",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 269,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "04-debounce-utility",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 263,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "05-input-validation",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 245,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "06-memoize-cache",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 244,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "07-callbacks-to-async",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 208,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "08-add-typescript-types",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 234,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "09-binary-search",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 210,
+    "outputCode": "",
+    "consistencyMode": "on"
+  },
+  {
+    "model": "verify-only",
+    "modelLabel": "Expected solutions",
+    "task": "10-refactor-to-composition",
+    "passed": true,
+    "verificationScore": 1,
+    "durationMs": 252,
+    "outputCode": "",
+    "consistencyMode": "on"
+  }
+]

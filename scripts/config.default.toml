@@ -1,0 +1,17 @@
+# Example monkeyDcode config — created automatically on first run.
+# Do not commit API keys; they are stored in credentials.json
+
+[default]
+# model and provider are set during interactive setup
+model = ""
+provider = ""
+
+[verification]
+stages = ["syntax", "typecheck", "lint", "tests"]
+test_timeout = 120
+
+[consistency]
+max_retries = 3
+
+[context]
+auto_compact_every = 5

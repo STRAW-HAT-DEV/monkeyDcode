@@ -3,8 +3,12 @@
     "compilerOptions": {
         "jsx": "react-jsx",
         "jsxImportSource": "@opentui/react",
+        "types": ["bun"],
         "lib": ["ESNext", "DOM", "DOM.Iterable"],
-        "noUncheckedIndexedAccess": false
+        "noUncheckedIndexedAccess": false,
+        "paths": {
+            "@monkeydcode/engine/session/mdc-bridge": ["./src/stubs/mdc-bridge-stub.ts"]
+        }
     },
     "include": ["src"]
 }

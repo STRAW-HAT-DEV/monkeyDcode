@@ -1,2 +1,2 @@
-// @monkeydcode/python-bridge — placeholder until Step 5+
-export {}
+export * from "./bridge.ts"
+export * from "./client.ts"

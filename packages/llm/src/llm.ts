@@ -8,6 +8,7 @@ import type { LLMRequest, LLMResponse, LLMEvent, UsageStats } from "./schema.ts"
 import { LLMError } from "./error.ts"
 import { RouteRegistry } from "./route-registry.ts"
 import type { Route } from "./route.ts"
+import { LLMRuntime } from "./runtime.ts"
 
 async function* readLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
     const reader = body.getReader()
@@ -39,17 +40,70 @@ function resolveRoute(req: LLMRequest): Route {
             req.model.provider,
         )
     }
+    if (!route.config.handler && !route.config.protocol) {
+        throw new LLMError(
+            `Route for "${req.model.provider}" has neither a handler nor a protocol configured.`,
+            "model_not_found",
+            req.model.provider,
+        )
+    }
     return route
+}
+
+// Generous default so slow local models can finish; 0 disables the timeout.
+// Override with MDCODE_LLM_TIMEOUT_MS.
+const DEFAULT_LLM_TIMEOUT_MS = 600_000
+
+function resolveTimeoutMs(): number {
+    const raw = process.env.MDCODE_LLM_TIMEOUT_MS
+    if (raw === undefined) return DEFAULT_LLM_TIMEOUT_MS
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_LLM_TIMEOUT_MS
+}
+
+function isTimeoutError(e: unknown): boolean {
+    if (e instanceof DOMException && e.name === "TimeoutError") return true
+    if (e instanceof Error) {
+        return e.name === "TimeoutError" || /timed out|timeout|ETIMEDOUT/i.test(e.message)
+    }
+    return false
 }
 
 async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     const { protocol, baseUrl, apiKey, defaultHeaders = {} } = route.config
-    const key = apiKey() ?? ""
-    const url = `${baseUrl}${protocol.buildPath(req.model.id)}`
+    if (!protocol) throw new LLMError(`No protocol on route "${route.provider}"`, "unknown", route.provider)
+    const resolvedBase = LLMRuntime.getBaseUrl(route.provider, baseUrl)
+    const key = LLMRuntime.getApiKey(route.provider, apiKey) ?? ""
+    const url = `${resolvedBase}${protocol.buildPath(req.model.id)}`
     const headers = { ...defaultHeaders, ...protocol.buildHeaders(key) }
     const body = JSON.stringify(protocol.buildBody(req))
 
-    const res = await fetch(url, { method: "POST", headers, body })
+    const timeoutMs = resolveTimeoutMs()
+    const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
+
+    let res: Response
+    try {
+        res = await fetch(url, { method: "POST", headers, body, signal })
+    } catch (e) {
+        if (isTimeoutError(e)) {
+            throw new LLMError(
+                `${req.model.provider}: request timed out after ${timeoutMs}ms. ` +
+                    `The model may be too slow for this task — try a smaller/faster model, ` +
+                    `or raise the limit with MDCODE_LLM_TIMEOUT_MS.`,
+                "timeout",
+                req.model.provider,
+                undefined,
+                e,
+            )
+        }
+        throw new LLMError(
+            `${req.model.provider}: network error — ${e instanceof Error ? e.message : String(e)}`,
+            "network_error",
+            req.model.provider,
+            undefined,
+            e,
+        )
+    }
 
     if (!res.ok) {
         const text = await res.text().catch(() => `HTTP ${res.status}`)
@@ -62,6 +116,78 @@ async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     }
 
     return res
+}
+
+// ─── Transient-error retry ─────────────────────────────────────────────────────
+// Local model servers (e.g. Ollama) can drop the connection mid-generation
+// (ECONNRESET) or stall. Retry these transient failures with backoff so a single
+// flaky response doesn't abort the whole task. Deterministic failures (auth,
+// model-not-found, bad request) are NOT retried.
+
+const TRANSIENT_CODES: ReadonlySet<string> = new Set(["network_error", "timeout", "rate_limited"])
+
+function maxRetries(): number {
+    const raw = process.env.MDCODE_LLM_MAX_RETRIES
+    if (raw === undefined) return 4
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 4
+}
+
+function isTransient(e: unknown): boolean {
+    if (e instanceof LLMError) return TRANSIENT_CODES.has(e.code)
+    const msg = e instanceof Error ? e.message : String(e)
+    return /ECONNRESET|socket connection was closed|ETIMEDOUT|EPIPE|ECONNREFUSED|fetch failed|timed out/i.test(msg)
+}
+
+/** Provider-suggested wait (ms) for a rate-limit error, parsed from the message. */
+function suggestedRetryMs(e: unknown): number | undefined {
+    const msg = e instanceof Error ? e.message : String(e)
+    // e.g. "Please try again in 6.635s" or "retry-after: 2"
+    const m = /try again in ([\d.]+)\s*(ms|s)?|retry[-\s]?after["':\s]+([\d.]+)/i.exec(msg)
+    if (!m) return undefined
+    if (m[1]) {
+        const n = parseFloat(m[1])
+        return Math.ceil(m[2] === "ms" ? n : n * 1000)
+    }
+    if (m[3]) return Math.ceil(parseFloat(m[3]) * 1000)
+    return undefined
+}
+
+function backoffMs(e: unknown, attempt: number): number {
+    // Honor the server's requested delay for rate limits (+250ms buffer);
+    // otherwise exponential backoff.
+    const suggested = suggestedRetryMs(e)
+    if (suggested !== undefined) return Math.min(suggested + 250, 60_000)
+    return Math.min(1000 * 2 ** attempt, 8000)
+}
+
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+async function withRetry<T>(provider: string, fn: () => Promise<T>): Promise<T> {
+    const retries = maxRetries()
+    let lastErr: unknown
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await fn()
+        } catch (e) {
+            lastErr = e
+            if (!isTransient(e) || attempt === retries) {
+                throw e instanceof LLMError ? e : LLMError.from(e, provider)
+            }
+            await delay(backoffMs(e, attempt))
+        }
+    }
+    throw lastErr instanceof LLMError ? lastErr : LLMError.from(lastErr, provider)
+}
+
+async function fetchAndCollect(req: LLMRequest): Promise<LLMResponse> {
+    const route = resolveRoute(req)
+    const res = await doFetch(route, req)
+    const events: LLMEvent[] = []
+    for await (const line of readLines(res.body!)) {
+        events.push(...route.config.protocol!.parseChunk(line))
+    }
+    return buildResponseFromEvents(events)
 }
 
 function buildResponseFromEvents(events: LLMEvent[]): LLMResponse {
@@ -107,16 +233,15 @@ function buildResponseFromEvents(events: LLMEvent[]): LLMResponse {
 
 export const LLM = {
     generate(req: LLMRequest): Effect.Effect<LLMResponse, LLMError> {
+        const route = resolveRoute(req)
+        if (route.config.handler) {
+            return Effect.tryPromise({
+                try: () => route.config.handler!.generate(req),
+                catch: (e) => LLMError.from(e, req.model.provider),
+            })
+        }
         return Effect.tryPromise({
-            try: async () => {
-                const route = resolveRoute(req)
-                const res = await doFetch(route, req)
-                const events: LLMEvent[] = []
-                for await (const line of readLines(res.body!)) {
-                    events.push(...route.config.protocol.parseChunk(line))
-                }
-                return buildResponseFromEvents(events)
-            },
+            try: () => withRetry(req.model.provider, () => fetchAndCollect(req)),
             catch: (e: unknown) => LLMError.from(e, req.model.provider),
         })
     },
@@ -124,16 +249,24 @@ export const LLM = {
     // Promise-based API — no Effect import needed in consuming code.
     async generateAsync(req: LLMRequest): Promise<LLMResponse> {
         const route = resolveRoute(req)
-        const res = await doFetch(route, req)
-        const events: LLMEvent[] = []
-        for await (const line of readLines(res.body!)) {
-            events.push(...route.config.protocol.parseChunk(line))
+        if (route.config.handler) {
+            try {
+                return await route.config.handler.generate(req)
+            } catch (e) {
+                throw LLMError.from(e, req.model.provider)
+            }
         }
-        return buildResponseFromEvents(events)
+        return withRetry(req.model.provider, () => fetchAndCollect(req))
     },
 
     async *stream(req: LLMRequest): AsyncIterable<LLMEvent> {
         const route = resolveRoute(req)
+
+        if (route.config.handler) {
+            yield* route.config.handler.stream(req)
+            return
+        }
+
         let res: Response
         try {
             res = await doFetch(route, req)
@@ -145,7 +278,7 @@ export const LLM = {
         const events: LLMEvent[] = []
 
         for await (const line of readLines(res.body!)) {
-            const chunk = route.config.protocol.parseChunk(line)
+            const chunk = route.config.protocol!.parseChunk(line)
             for (const event of chunk) {
                 events.push(event)
                 yield event

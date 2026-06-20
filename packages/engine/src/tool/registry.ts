@@ -30,6 +30,25 @@ import * as Log from "@monkeydcode/core/util/log"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { VerifyTool } from "./verify"
+import { KnowledgeGraphTool } from "./knowledge_graph"
+import { VectorSearchTool } from "./vector_search"
+import { ModelProbeTool } from "./model_probe"
+import { ConsistencySampleTool } from "./consistency_sample"
+import { aliasTool } from "./mdc/factory"
+import {
+    RecipeTool, SshTool, EvalTool, JobTool, CalcTool,
+} from "./mdc/tier2"
+import { AstEditTool, AstGrepTool, DebugTool } from "./mdc/tier3"
+import { GitTool, GithubTool } from "./mdc/tier4"
+import {
+    BrowserTool, LocalhostViewTool, GenerateImageTool, InspectImageTool,
+} from "./mdc/tier5"
+import { IrcTool } from "./mdc/tier6"
+import {
+    RetainTool, RecallTool, ReflectTool, CheckpointTool, RewindTool, HandoffTool,
+} from "./mdc/tier7"
+import { VerifyPipelineTool, PlanTool } from "./mdc/aliases"
 import { Glob } from "@monkeydcode/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -135,6 +154,34 @@ export const layer: Layer.Layer<
     const edit = yield* EditTool
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
+    const verifytool = yield* VerifyTool
+    const knowledgeGraph = yield* KnowledgeGraphTool
+    const vectorSearch = yield* VectorSearchTool
+    const modelProbe = yield* ModelProbeTool
+    const consistencySample = yield* ConsistencySampleTool
+    const verifyPipeline = yield* VerifyPipelineTool
+    const planTool = yield* PlanTool
+    const recipe = yield* RecipeTool
+    const ssh = yield* SshTool
+    const evalTool = yield* EvalTool
+    const job = yield* JobTool
+    const calc = yield* CalcTool
+    const astEdit = yield* AstEditTool
+    const astGrep = yield* AstGrepTool
+    const debugTool = yield* DebugTool
+    const gitTool = yield* GitTool
+    const github = yield* GithubTool
+    const browser = yield* BrowserTool
+    const localhostView = yield* LocalhostViewTool
+    const generateImage = yield* GenerateImageTool
+    const inspectImage = yield* InspectImageTool
+    const irc = yield* IrcTool
+    const retain = yield* RetainTool
+    const recall = yield* RecallTool
+    const reflect = yield* ReflectTool
+    const checkpoint = yield* CheckpointTool
+    const rewind = yield* RewindTool
+    const handoff = yield* HandoffTool
     const skilltool = yield* SkillTool
     const agent = yield* Agent.Service
 
@@ -224,7 +271,6 @@ export const layer: Layer.Layer<
         }
 
         yield* config.get()
-        const questionEnabled = ["app", "cli", "desktop"].includes(flags.client) || flags.enableQuestionTool
 
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
@@ -246,13 +292,49 @@ export const layer: Layer.Layer<
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          verify: Tool.init(verifytool),
+          knowledge_graph: Tool.init(knowledgeGraph),
+          vector_search: Tool.init(vectorSearch),
+          model_probe: Tool.init(modelProbe),
+          consistency_sample: Tool.init(consistencySample),
+          verify_pipeline: Tool.init(verifyPipeline),
+          plan_mode: Tool.init(planTool),
+          recipe: Tool.init(recipe),
+          ssh: Tool.init(ssh),
+          eval: Tool.init(evalTool),
+          job: Tool.init(job),
+          calc: Tool.init(calc),
+          ast_edit: Tool.init(astEdit),
+          ast_grep: Tool.init(astGrep),
+          debug: Tool.init(debugTool),
+          git: Tool.init(gitTool),
+          github: Tool.init(github),
+          browser: Tool.init(browser),
+          localhost_view: Tool.init(localhostView),
+          generate_image: Tool.init(generateImage),
+          inspect_image: Tool.init(inspectImage),
+          irc: Tool.init(irc),
+          retain: Tool.init(retain),
+          recall: Tool.init(recall),
+          reflect: Tool.init(reflect),
+          checkpoint: Tool.init(checkpoint),
+          rewind: Tool.init(rewind),
+          handoff: Tool.init(handoff),
         })
+
+        const shellAlias = aliasTool(tool.shell, "shell")
+        const todoWriteAlias = aliasTool(tool.todo, "todo_write")
+        const planAlias = aliasTool(tool.plan_mode, "plan")
+        const webfetchAlias = aliasTool(tool.fetch, "webfetch")
+        const websearchAlias = aliasTool(tool.search, "websearch")
+        const patchAlias = aliasTool(tool.patch, "apply_patch")
 
         return {
           custom,
           builtin: [
             tool.invalid,
-            ...(questionEnabled ? [tool.question] : []),
+            tool.question,
+            shellAlias,
             tool.shell,
             tool.read,
             tool.glob,
@@ -260,15 +342,48 @@ export const layer: Layer.Layer<
             tool.edit,
             tool.write,
             tool.task,
-            ...(flags.experimentalBackgroundSubagents ? [tool.task_status] : []),
+            tool.task_status,
+            webfetchAlias,
             tool.fetch,
-            tool.todo,
+            websearchAlias,
             tool.search,
-            ...(flags.experimentalScout ? [tool.repo_clone, tool.repo_overview] : []),
+            todoWriteAlias,
+            tool.todo,
+            tool.repo_clone,
+            tool.repo_overview,
             tool.skill,
+            patchAlias,
             tool.patch,
-            ...(flags.experimentalLspTool ? [tool.lsp] : []),
-            ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
+            tool.verify,
+            tool.verify_pipeline,
+            tool.knowledge_graph,
+            tool.vector_search,
+            tool.model_probe,
+            tool.consistency_sample,
+            tool.lsp,
+            planAlias,
+            tool.plan,
+            tool.recipe,
+            tool.ssh,
+            tool.eval,
+            tool.job,
+            tool.calc,
+            tool.ast_edit,
+            tool.ast_grep,
+            tool.debug,
+            tool.git,
+            tool.github,
+            tool.browser,
+            tool.localhost_view,
+            tool.generate_image,
+            tool.inspect_image,
+            tool.irc,
+            tool.retain,
+            tool.recall,
+            tool.reflect,
+            tool.checkpoint,
+            tool.rewind,
+            tool.handoff,
           ],
           task: tool.task,
           read: tool.read,

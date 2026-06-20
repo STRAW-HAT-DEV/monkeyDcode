@@ -1,0 +1,16 @@
+Write a minimal failing test that reproduces this bug. The test must:
+1. Fail with the exact error described
+2. Pass once the bug is fixed
+3. Be self-contained — no external dependencies beyond what's already in the project
+4. Have a descriptive name that explains what the bug is
+
+Bug report:
+{REPORT}
+
+Stack trace (if available):
+{STACK}
+
+Suspect files:
+{FILES}
+
+Output ONLY the test code. No explanation. The test must fail right now.

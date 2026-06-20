@@ -1,0 +1,23 @@
+Two senior engineers reviewed this code change independently. Produce the final definitive issue list.
+
+Rules:
+- Include an issue only if at least one reviewer confirmed it as real
+- Remove anything marked as a false positive by the critic
+- Merge duplicates, keeping the higher severity
+- Add any issues the critic found that were missed
+- Order by severity: critical first, then high, medium, low
+
+Diff:
+{DIFF}
+
+Actor findings:
+{ACTOR}
+
+Critic findings:
+{CRITIC}
+
+Output a JSON array of confirmed issues. Same format as before:
+[{ severity, type, file, line, message, suggestion }]
+
+This is the final list that will be acted on. Be accurate.
+Output ONLY the JSON array.

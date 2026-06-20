@@ -121,4 +121,12 @@ async function* streamChat(
     }
 }
 
-export const Runner = { createSession, getHistory, chat, streamChat }
+function logMessage(sessionId: string, role: Message["role"], content: string): void {
+    const db = getDb()
+    db.run(
+        "INSERT INTO mdc_message (id, session_id, role, content) VALUES (?, ?, ?, ?)",
+        [randomUUID(), sessionId, role, content],
+    )
+}
+
+export const Runner = { createSession, getHistory, chat, streamChat, logMessage }

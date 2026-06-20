@@ -1,18 +1,38 @@
 {
     "name": "monkeydcode",
     "private": true,
+    "license": "MIT",
+    "author": "STRAW-HAT-DEV (https://github.com/STRAW-HAT-DEV)",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/STRAW-HAT-DEV/monkeyDcode.git"
+    },
     "workspaces": [
         "packages/*"
     ],
+    "bin": {
+        "mdc": "./bin/mdc",
+        "monkeydcode": "./bin/monkeydcode"
+    },
     "scripts": {
         "dev": "bun run --filter @monkeydcode/tui dev",
+        "mdc": "bun bin/mdc",
+        "start": "bun bin/mdc",
         "build": "bun run --filter '*' build",
         "typecheck": "bun run --filter '*' typecheck",
-        "test": "bun run --filter '*' test",
-        "lint": "biome check ."
+        "test": "bun test packages",
+        "lint": "biome check .",
+        "bench": "bun run benchmarks/run.ts",
+        "bench:baseline": "MDCODE_NO_CONSISTENCY=1 bun run benchmarks/run.ts",
+        "bench:task": "bun run benchmarks/run.ts --task",
+        "bench:model": "bun run benchmarks/run.ts --model",
+        "bench:verify-only": "bun run benchmarks/run.ts --verify-only",
+        "bench:compare": "bun run benchmarks/compare.ts"
     },
     "devDependencies": {
         "@types/bun": "latest",
-        "typescript": "^5.8.0"
+        "typescript": "^5.8.0",
+        "effect": "4.0.0-beta.66",
+        "fastest-levenshtein": "^1.0.16"
     }
 }

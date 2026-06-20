@@ -36,7 +36,10 @@
         "./agent": "./src/agent.ts",
         "./aisdk": "./src/aisdk.ts",
         "./git": "./src/git.ts",
-        "./v2-schema": "./src/v2-schema.ts"
+        "./v2-schema": "./src/v2-schema.ts",
+        "./mdc-config": "./src/mdc-config.ts",
+        "./credentials": "./src/credentials.ts",
+        "./model-setup": "./src/model-setup.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
@@ -87,7 +90,8 @@
         "ai-gateway-provider": "3.1.2",
         "venice-ai-sdk-provider": "2.0.1",
         "gitlab-ai-provider": "6.7.0",
-        "google-auth-library": "10.5.0"
+        "google-auth-library": "10.5.0",
+        "@clack/prompts": "1.0.0-alpha.1"
     },
     "devDependencies": {
         "@types/bun": "latest",

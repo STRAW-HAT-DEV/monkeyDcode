@@ -1,11 +1,15 @@
-// A Route binds a Protocol to a base URL + auth.
+// A Route binds a Protocol (or SDK handler) to a base URL + auth.
 // Open/Closed Principle: adding a new provider = new Route.make() call, nothing else changes.
 
 import type { Protocol } from "./protocol.ts"
 import type { ModelRef } from "./schema.ts"
+import type { LLMHandler } from "./handler.ts"
+
+export type { LLMHandler }
 
 export interface RouteConfig {
-    readonly protocol: Protocol
+    readonly protocol?: Protocol           // legacy raw-fetch (kept for compat)
+    readonly handler?: LLMHandler          // SDK-based (preferred when present)
     readonly baseUrl: string
     readonly apiKey: () => string | undefined
     readonly defaultHeaders?: Record<string, string>

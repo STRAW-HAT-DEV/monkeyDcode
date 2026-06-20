@@ -1,15 +1,67 @@
-# react
+# monkeyDcode
 
-To install dependencies:
+CLI coding agent that produces consistent results across LLM sizes — from local Qwen 7B to Claude Opus.
+
+## Features
+
+- **Adaptive Plan Decomposition** — weak models get atomic steps, strong models get coarse tasks
+- **Multi-Temperature Sampling** — generate N candidates, verify each, pick the best
+- **Deterministic Verification** — syntax → typecheck → lint → tests → smoke
+- **Specialist Sub-Agents** — bug-fix, feature, refactor, debug
+- **Actor-Critic Review** — 3-round code review after every task
+
+## Install
+
+Use the full OS guide:
+
+- [INSTALLATION.md](./INSTALLATION.md)
+
+Quick path:
+
+- **Windows:** `.\scripts\install.ps1`
+- **macOS/Linux:** `curl -fsSL https://raw.githubusercontent.com/STRAW-HAT-DEV/monkeyDcode/main/scripts/install.sh | bash`
+
+Then run:
+
+```bash
+mdc
+```
+
+First run opens the setup wizard for provider + API key + model.
+
+## Use
+
+```bash
+# Interactive (global command)
+mdc
+
+# One-shot task
+mdc "Add pagination to the users API"
+```
+
+## Development
 
 ```bash
 bun install
+bun run typecheck
+bun run test
+bun run bench               # benchmarks with consistency engine (needs Ollama + models)
+bun run bench:baseline      # A/B without consistency engine
+bun run bench:verify-only   # offline — validates expected benchmark solutions
+bun run bench:compare       # compare two benchmark result JSON files
+
+# Echo mode (session processor only, no orchestrator):
+MDCODE_ECHO=1 bun run dev
 ```
 
-To run:
+## Architecture
 
-```bash
-bun dev
+```
+mdc → TUI → Orchestrator → Plan/Build Agents → Consistency Engine → Verification Pipeline
+                    ↓
+              Python Bridge (tree-sitter, vector store, knowledge graph)
 ```
 
-This project was created using `bun create tui`. [create-tui](https://git.new/create-tui) is the easiest way to get started with OpenTUI.
+## License
+
+See [LICENSE](LICENSE).

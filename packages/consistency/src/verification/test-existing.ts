@@ -3,7 +3,21 @@ import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import type { StageResult, VerificationError } from "./types.ts"
 
+import { runWithTimeout } from "./utils.ts"
+
 export async function run(projectRoot: string, timeoutMs: number): Promise<StageResult> {
+    return runWithTimeout(
+        () => runInner(projectRoot),
+        timeoutMs,
+        () => ({
+            passed: false,
+            errors: [{ file: projectRoot, line: 0, message: `Tests timed out after ${timeoutMs}ms`, severity: "error" }],
+            durationMs: timeoutMs,
+        }),
+    )
+}
+
+async function runInner(projectRoot: string): Promise<StageResult> {
     const start = Date.now()
 
     const runner = detectTestRunner(projectRoot)
@@ -58,6 +72,22 @@ function detectTestRunner(projectRoot: string): TestRunner | null {
         return {
             command: $`python3 -m pytest -x -q --tb=short`.cwd(projectRoot).quiet().nothrow() as any,
             parse: parsePytestOutput,
+        }
+    }
+
+    // Rust: cargo test
+    if (existsSync(join(projectRoot, "Cargo.toml"))) {
+        return {
+            command: $`cargo test --quiet`.cwd(projectRoot).quiet().nothrow() as any,
+            parse: parseGenericTestOutput,
+        }
+    }
+
+    // Go: go test
+    if (existsSync(join(projectRoot, "go.mod"))) {
+        return {
+            command: $`go test ./...`.cwd(projectRoot).quiet().nothrow() as any,
+            parse: parseGenericTestOutput,
         }
     }
 
