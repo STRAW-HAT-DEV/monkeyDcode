@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { readFile, writeFile, mkdir } from "fs/promises"
-import { existsSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { basename, extname, dirname } from "path"
 import * as Sampler from "@monkeydcode/consistency/sampler"
 import * as Retriever from "@monkeydcode/context/retriever"
@@ -8,6 +8,7 @@ import * as Capability from "@monkeydcode/consistency/model-capability/detector"
 import { recordPassRate } from "@monkeydcode/consistency/model-capability/detector"
 import {
     applyPatch,
+    formatReadOutput,
     globalSnapshotStore,
     HASHLINE_EDIT_PROMPT,
     looksLikeHashlinePatch,
@@ -66,20 +67,57 @@ function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: nu
             files: step.targetFiles,
             model,
             modelId,
+            creative: step.creative,
         })
 
         yield* applyChange(result.selected.change, step.targetFiles)
         yield* Effect.tryPromise(() => recordPassRate(modelId, result.selected.verification.passed))
 
-        yield* WorkingMemory.appendStep({ index, confidence: result.confidence })
+        yield* WorkingMemory.appendStep({
+            index,
+            confidence: result.confidence,
+            description: step.description,
+            files: step.targetFiles,
+        })
     })
 }
 
 // ─── Prompt ──────────────────────────────────────────────────────────────────
 
+/**
+ * Show the model the CURRENT content of any target file that already exists,
+ * with a real [path#TAG] hashline header. Without this, a step touching a file
+ * created in an earlier turn/step is generated blind — the model has no idea
+ * the file exists, what's in it, or what tag a hashline patch must reference,
+ * so it either regenerates from scratch (destroying prior work) or emits a
+ * hashline patch that fails tag validation.
+ */
+function readExistingTargets(files: string[]): string {
+    const blocks: string[] = []
+    for (const f of files) {
+        if (!existsSync(f)) continue
+        try {
+            const content = readFileSync(f, "utf-8")
+            const capped = content.length > 12_000
+                ? content.slice(0, 12_000) + "\n… (truncated — file continues, re-read for more)"
+                : content
+            const { text } = formatReadOutput(f, capped, { store: globalSnapshotStore })
+            blocks.push(text)
+        } catch {
+            // Unreadable (permissions, binary, etc.) — treat as if it doesn't exist.
+        }
+    }
+    return blocks.length > 0
+        ? `## Current Content of Existing Target Files — this already exists, this is an EDIT not a fresh create\n${blocks.join("\n\n")}`
+        : ""
+}
+
 function buildExecutionPrompt(step: PlanStep, context: Retriever.AssembledContext): string {
     const fileList = step.targetFiles.join("\n")
+    const existingContent = readExistingTargets(step.targetFiles)
     return `${Retriever.formatForPrompt(context)}
+
+${existingContent}
 
 ## Task
 ${step.description}
@@ -93,8 +131,8 @@ ${step.verificationCriteria}
 ## Output Format — CRITICAL
 ${HASHLINE_EDIT_PROMPT}
 
-For EXISTING files: output hashline patches in \`\`\`hashline fences (NOT full-file rewrites).
-For NEW files only: use \`\`\`typescript:path/to/file.ts with complete contents.
+For EXISTING files shown above with a [path#TAG] header: output hashline patches in \`\`\`hashline fences referencing that exact tag (NOT full-file rewrites).
+For NEW files with no header above (they don't exist yet): use \`\`\`typescript:path/to/file.ts with complete contents.
 
 Target file paths (use in [path#TAG] after read):
 ${fileList}`

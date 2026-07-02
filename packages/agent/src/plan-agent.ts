@@ -36,6 +36,9 @@ export interface PlanStep {
     changeType: "create" | "modify" | "delete"
     dependencies: number[]
     verificationCriteria: string
+    /** Holistic/creative artifact (e.g. a landing page) — sampling and grading
+     *  should favor diversity and taste over convergence-to-average. */
+    creative?: boolean
 }
 
 export interface Plan {

@@ -5,13 +5,21 @@ import * as SignatureIndex from "./signature-index.ts"
 import * as VectorStore from "./vector_store.ts"
 import { call } from "@monkeydcode/python-bridge/bridge"
 
+interface WorkingMemoryStep {
+    index: number
+    confidence: number
+    timestamp: string
+    description?: string
+    files?: string[]
+}
+
 export interface AssembledContext {
     signatures: SignatureIndex.Signature[]
     relatedExamples: string[]
     graphNeighbors: string[]
     workingMemory: {
         currentGoal: string
-        completedSteps: { index: number; confidence: number; timestamp: string }[]
+        completedSteps: WorkingMemoryStep[]
         knownConstraints: string[]
     }
 }
@@ -30,10 +38,12 @@ async function loadWorkingMemory() {
         const raw = await readFile(join(process.cwd(), ".monkeydcode", "working-memory.json"), "utf-8")
         return JSON.parse(raw) as {
             currentGoal: string
-            completedSteps: { index: number; confidence: number; timestamp: string }[]
+            completedSteps: WorkingMemoryStep[]
             knownConstraints: string[]
         }
     } catch {
+        // No working-memory.json yet is normal (first run); anything else means
+        // the agent silently loses all memory of prior steps for this turn.
         return { currentGoal: "", completedSteps: [], knownConstraints: [] }
     }
 }
@@ -47,21 +57,28 @@ export function retrieve(
     return Effect.tryPromise(async () => {
         const sigArrays = await Promise.all(
             query.files.map(f =>
-                Effect.runPromise(SignatureIndex.extractSignatures(f)).catch(
-                    () => [] as SignatureIndex.Signature[],
-                ),
+                Effect.runPromise(SignatureIndex.extractSignatures(f)).catch(err => {
+                    console.warn(`[retriever] signature extraction failed for ${f}:`, err)
+                    return [] as SignatureIndex.Signature[]
+                }),
             ),
         )
         const signatures = sigArrays.flat().slice(0, maxSignatures(level))
 
         const examples = await Effect.runPromise(
             VectorStore.search(query.description, maxExamples(level)),
-        ).catch(() => [] as { text: string; score: number }[])
+        ).catch(err => {
+            console.warn("[retriever] vector store search failed:", err)
+            return [] as { text: string; score: number }[]
+        })
 
         const depth = graphDepth(level)
         const neighborArrays = await Promise.all(
             query.files.map(f =>
-                call<string[]>("knowledgeGraph.neighbors", { node: f, depth }).catch(() => []),
+                call<string[]>("knowledgeGraph.neighbors", { node: f, depth }).catch(err => {
+                    console.warn(`[retriever] knowledge graph lookup failed for ${f}:`, err)
+                    return []
+                }),
             ),
         )
         const graphNeighbors = neighborArrays.flat().slice(0, maxNeighbors(level))
@@ -107,10 +124,18 @@ export function formatForPrompt(ctx: AssembledContext): string {
     }
 
     if (ctx.workingMemory.currentGoal || ctx.workingMemory.completedSteps.length > 0) {
+        // Render what was actually built, not just how many steps ran — the model
+        // needs to know it already created index.html with a hero section, not
+        // just that "1 step" happened, or it treats every turn as a blank slate.
+        const recentSteps = ctx.workingMemory.completedSteps.slice(-10)
+        const stepLines = recentSteps.map(s => {
+            const files = s.files && s.files.length > 0 ? ` [${s.files.join(", ")}]` : ""
+            return `- ${s.description ?? `step ${s.index}`}${files}`
+        })
         parts.push(
-            "## Working Memory\n" +
+            "## Working Memory (what you already built — do not recreate this from scratch)\n" +
             `Goal: ${ctx.workingMemory.currentGoal}\n` +
-            `Completed: ${ctx.workingMemory.completedSteps.length} steps\n` +
+            (stepLines.length > 0 ? `Previously completed:\n${stepLines.join("\n")}\n` : "") +
             `Constraints: ${ctx.workingMemory.knownConstraints.join("; ") || "none"}`,
         )
     }

@@ -42,8 +42,17 @@ export class StaticAssetStageSelector implements StageSelector {
     ) {}
 
     select(files: string[], stages: Stage[]): Stage[] {
-        // No files to reason about → preserve configured behavior.
-        if (files.length === 0) return stages
+        // No target files to scope verification to. Previously this "preserved
+        // configured behavior" by running the full stage set — but with no files,
+        // detectProjectRoot() falls back to process.cwd(), and the "tests" stage
+        // then spawns a fresh `bun test` there with no path scoping. In this
+        // monorepo that means running the ENTIRE test suite, which includes
+        // whatever test is currently calling this pipeline — a real recursive
+        // hang (verified: a live-Ollama sampler test recursively re-invoked
+        // itself via this exact path and never terminated). With no file to
+        // anchor typecheck/lint/tests to, they can't meaningfully verify "this
+        // candidate" anyway, so skip straight to the static-safe stages.
+        if (files.length === 0) return stages.filter(s => this.staticSafeStages.has(s))
 
         const touchesCode = files.some(f => this.codeExtensions.has(extensionOf(f)))
         if (touchesCode) return stages

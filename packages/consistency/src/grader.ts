@@ -1,5 +1,7 @@
 import { distance } from "fastest-levenshtein"
 import { treeSitter } from "@monkeydcode/python-bridge"
+import { LLM } from "@monkeydcode/llm"
+import type { ModelRef } from "@monkeydcode/llm"
 import type { VerificationResult } from "./verification/types.ts"
 
 export interface GradedCandidate {
@@ -11,16 +13,83 @@ export interface GradedCandidate {
     rrpScore: number
 }
 
+export interface GradeOptions {
+    /** Holistic/creative artifact (e.g. a landing page). Convergence-to-average
+     *  is a correctness signal for mechanical tasks (5 bugfix attempts agreeing
+     *  implies the agreed answer is right) and an anti-creativity bias for
+     *  design/creative ones (5 designs SHOULD differ; the most "average" one
+     *  is usually the blandest, not the best). Skip consistency scoring and
+     *  judge quality via rubric instead of code-smell heuristics that don't
+     *  apply to markup/design. */
+    creative?: boolean
+    /** Used for the LLM-based creative quality judge; omitted → falls back to
+     *  the plain heuristic (still better than nothing, but can't judge taste). */
+    model?: ModelRef
+}
+
 export async function gradeAll(candidates: Array<{
     change: string
     temperature: number
     verification: VerificationResult
     files?: string[]
-}>): Promise<GradedCandidate[]> {
+}>, options: GradeOptions = {}): Promise<GradedCandidate[]> {
+    if (options.creative) {
+        return gradeCreative(candidates, options.model)
+    }
+
     const normalized = await Promise.all(
         candidates.map(c => normalizeForComparison(c.change, c.files?.[0])),
     )
     return candidates.map((c, i) => grade(c, candidates, normalized[i]!, normalized))
+}
+
+// ─── Creative grading ──────────────────────────────────────────────────────
+
+async function gradeCreative(
+    candidates: Array<{ change: string; temperature: number; verification: VerificationResult }>,
+    model?: ModelRef,
+): Promise<GradedCandidate[]> {
+    const qualityScores = await Promise.all(
+        candidates.map(c => (model ? judgeCreativeQuality(c.change, model) : Promise.resolve(computeQuality(c.change)))),
+    )
+    return candidates.map((c, i) => {
+        const verificationScore = c.verification.score
+        const qualityScore = qualityScores[i]!
+        // No consistency term: verification (does it actually parse/build) still
+        // matters, but the deciding factor is judged quality, not averageness.
+        const rrpScore = 0.5 * verificationScore + 0.5 * qualityScore
+        return { ...c, consistencyScore: 1, qualityScore, rrpScore }
+    })
+}
+
+/** LLM-as-judge rubric score for design/creative output. Explicitly instructed
+ *  not to reward genericness, since that's the failure mode being fixed. */
+async function judgeCreativeQuality(change: string, model: ModelRef): Promise<number> {
+    const code = extractPrimaryCodeBlock(change)
+    try {
+        const response = await LLM.generateAsync({
+            model,
+            messages: [{
+                role: "user",
+                content:
+                    "Rate the following generated artifact from 0.0 to 1.0 on design/creative " +
+                    "quality: visual hierarchy, brand coherence, whitespace/layout balance, and " +
+                    "whether the copy feels intentional rather than generic placeholder text. " +
+                    "Do NOT reward genericness or blandness as \"safe\" — a distinctive, " +
+                    "well-composed result should score higher than a bland but conventional one. " +
+                    "Respond with ONLY a number between 0 and 1, nothing else.\n\n" +
+                    "```\n" + code.slice(0, 6000) + "\n```",
+            }],
+            temperature: 0,
+        })
+        const match = response.text.match(/(\d*\.?\d+)/)
+        const score = match ? parseFloat(match[1]!) : NaN
+        return Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0.6
+    } catch {
+        // Judge call failed — neutral score. 0 would unfairly tank an otherwise
+        // valid candidate; 1 would rubber-stamp everything.
+        return 0.6
+    }
 }
 
 function grade(

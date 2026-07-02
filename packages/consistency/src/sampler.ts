@@ -19,6 +19,10 @@ export interface SamplingTask {
     files: string[]
     model: ModelRef
     modelId: string
+    /** Holistic/creative artifact (e.g. a landing page). Uses higher temperature
+     *  for real diversity across samples and grades by judged quality instead
+     *  of convergence-to-average — see grader.ts. */
+    creative?: boolean
 }
 
 export interface Candidate {
@@ -43,6 +47,20 @@ const TEMP_SETS: Record<number, number[]> = {
     6: [0.3, 0.4, 0.5, 0.6],
 }
 
+// Creative/holistic tasks (landing pages, etc.) want real diversity, not
+// convergence — low temperature just makes every candidate the same bland
+// output. Every level gets multiple higher-temperature samples here, including
+// levels 1-2, which otherwise get a single temp=0.3 shot and no sampling
+// benefit at all.
+const CREATIVE_TEMP_SETS: Record<number, number[]> = {
+    1: [0.7, 0.9],
+    2: [0.7, 0.9],
+    3: [0.7, 0.85, 1.0],
+    4: [0.7, 0.85, 1.0],
+    5: [0.7, 0.85, 1.0],
+    6: [0.7, 0.85, 1.0],
+}
+
 // Providers that serve a single model instance locally and process requests
 // effectively one-at-a-time. Firing candidates concurrently at them leaves a
 // queued connection idling, which can hit an OS-level socket timeout. For these
@@ -61,7 +79,9 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         const maxRetries = config.consistency.maxRetries
 
         const level = yield* Capability.detect(task.model)
-        const temps = TEMP_SETS[level] ?? [0.5]
+        const temps = task.creative
+            ? (CREATIVE_TEMP_SETS[level] ?? [0.8])
+            : (TEMP_SETS[level] ?? [0.5])
 
         // Generate candidates (no file I/O yet). Concurrency is provider-aware:
         // local single-instance servers (e.g. Ollama) run sequentially to avoid
@@ -93,7 +113,10 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         }
 
         const graded = yield* Effect.tryPromise(() =>
-            Grader.gradeAll(passing.map(p => ({ ...p, files: task.files }))),
+            Grader.gradeAll(
+                passing.map(p => ({ ...p, files: task.files })),
+                { creative: task.creative, model: task.model },
+            ),
         )
         const selected = Voter.selectBest(graded)
         return { selected, confidence: selected.rrpScore }

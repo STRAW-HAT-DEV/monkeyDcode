@@ -30,8 +30,14 @@ test("static-only changeset keeps smoke if configured", () => {
     ])
 })
 
-test("empty file list preserves configured stages", () => {
-    expect(defaultStageSelector.select([], FULL)).toEqual(FULL)
+test("empty file list drops code-only stages (no file to scope typecheck/lint/tests to)", () => {
+    // Previously this preserved the full stage set, which meant "tests" ran
+    // `bun test` at process.cwd() with zero path scoping — in this monorepo
+    // that recursively re-runs the entire suite, including whatever live test
+    // called into the pipeline in the first place. Verified reproduction: a
+    // sampler test that hit a real local Ollama model would trigger this path
+    // and hang/timeout indefinitely instead of completing.
+    expect(defaultStageSelector.select([], FULL)).toEqual(["syntax"])
 })
 
 test("selector is configurable (Open/Closed): custom code extensions", () => {

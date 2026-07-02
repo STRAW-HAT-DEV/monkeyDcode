@@ -89,15 +89,23 @@ const PROFILES: Record<TaskType, TypeProfile> = {
     },
 }
 
+// Task types where the deliverable is judged by taste/design rather than pure
+// correctness. "Avoid clever abstractions, use only well-known APIs" is good
+// advice for a bugfix and actively bad advice for a landing page — it pushes
+// weak models toward the blandest, most generic-looking output. Skip
+// conservatism constraints for these types; keep the determinism constraints
+// (complete output, no commentary) since those never hurt.
+const CREATIVE_TASK_TYPES = new Set<TaskType>(["web_page"])
+
 // Extra constraints injected for weaker models (higher level number). These force
 // the determinism that strong models give for free.
-function capabilityConstraints(level: number): string[] {
+function capabilityConstraints(level: number, type: TaskType): string[] {
     if (level <= 3) return []
     const strict = [
         "Output the COMPLETE file content — never snippets, placeholders, or \"...\"",
         "Do not include explanations or commentary outside the code",
     ]
-    if (level >= 5) {
+    if (level >= 5 && !CREATIVE_TASK_TYPES.has(type)) {
         strict.push(
             "Keep the solution simple and direct; avoid clever abstractions",
             "Use only well-known, widely-supported APIs",
@@ -111,7 +119,7 @@ export class TemplateEnhancer implements PromptEnhancer {
         const { type } = detectTaskType(input.rawTask)
         const profile = PROFILES[type]
         const deliverables = profile.deliverables
-        const constraints = [...profile.constraints, ...capabilityConstraints(input.capabilityLevel)]
+        const constraints = [...profile.constraints, ...capabilityConstraints(input.capabilityLevel, type)]
 
         return {
             taskType: type,
