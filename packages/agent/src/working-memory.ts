@@ -2,9 +2,19 @@ import { Effect } from "effect"
 import { writeFile, readFile, mkdir } from "fs/promises"
 import { join } from "path"
 
+export interface CompletedStep {
+    index: number
+    confidence: number
+    timestamp: string
+    /** What was actually done — e.g. "created index.html (Nike landing page)". Lets
+     *  the agent recall its own prior work instead of just a step count. */
+    description?: string
+    files?: string[]
+}
+
 interface State {
     currentGoal: string
-    completedSteps: { index: number; confidence: number; timestamp: string }[]
+    completedSteps: CompletedStep[]
     knownConstraints: string[]
     errorHistory: { step: number; error: string; timestamp: string }[]
 }
@@ -50,12 +60,14 @@ export function update(patch: Partial<State>) {
     })
 }
 
-export function appendStep(step: { index: number; confidence: number }) {
+export function appendStep(step: { index: number; confidence: number; description?: string; files?: string[] }) {
     return update({
         completedSteps: [{
             index: step.index,
             confidence: step.confidence,
             timestamp: new Date().toISOString(),
+            description: step.description,
+            files: step.files,
         }],
     })
 }

@@ -19,11 +19,20 @@ export function initSessionContext(projectRoot: string): Effect.Effect<void, unk
     return Effect.gen(function* () {
         yield* Effect.tryPromise(async () => {
             const files = await findSourceFiles(projectRoot)
-            await Promise.allSettled([
+            const results = await Promise.allSettled([
                 Effect.runPromise(SignatureIndex.indexProject(projectRoot)),
                 files.length > 0 ? VectorStore.indexFiles(files) : Promise.resolve(),
-                call("knowledgeGraph.build", { project_root: projectRoot }).catch(() => undefined),
+                call("knowledgeGraph.build", { project_root: projectRoot }),
             ])
+            const labels = ["signature index", "vector store", "knowledge graph"]
+            for (const [i, result] of results.entries()) {
+                if (result.status === "rejected") {
+                    console.warn(
+                        `[session-init] ${labels[i]} indexing failed — context quality will be degraded this session:`,
+                        result.reason,
+                    )
+                }
+            }
         })
     })
 }

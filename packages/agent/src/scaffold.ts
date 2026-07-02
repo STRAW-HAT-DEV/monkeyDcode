@@ -8,6 +8,7 @@
 // fixing WHAT it's asked to produce and WHERE it goes.
 
 import { join } from "path"
+import { existsSync, readFileSync } from "fs"
 import type { Plan, PlanStep } from "./plan-agent.ts"
 import type { EnhancedSpec } from "./prompt-enhancer.ts"
 
@@ -17,6 +18,20 @@ export interface ScaffoldFile {
     /** Constrained, self-contained instruction for producing this file. */
     instruction: string
     verificationCriteria: string
+    /** "modify" when the file already existed on disk when the scaffold was
+     *  built — tells the build agent this is an iterative edit, not a fresh
+     *  create, so it doesn't discard prior work. */
+    changeType: "create" | "modify"
+}
+
+/** Read a target file's current content if it already exists, else null. */
+function readExisting(path: string): string | null {
+    if (!existsSync(path)) return null
+    try {
+        return readFileSync(path, "utf-8")
+    } catch {
+        return null
+    }
 }
 
 export interface Scaffold {
@@ -45,16 +60,34 @@ export function scaffoldFor(spec: EnhancedSpec, root: string): Scaffold | null {
 
 function webPageScaffold(spec: EnhancedSpec, root: string): Scaffold {
     const path = join(root, "index.html")
-    const instruction = [
-        spec.task,
-        "",
-        "## Output Format — CRITICAL",
-        "Produce the COMPLETE contents of a single file `index.html`.",
-        "Output exactly one ```html fenced code block and nothing else.",
-        "The document must be fully self-contained: <!DOCTYPE html>, <head> with a",
-        "single <style> block, <body> with the content, and a single <script> block",
-        "before </body>. It must render correctly when opened directly in a browser.",
-    ].join("\n")
+    const existing = readExisting(path)
+    const instruction = existing
+        ? [
+            spec.task,
+            "",
+            "## This Is an ITERATIVE EDIT — index.html already exists",
+            "The current content is below. Apply ONLY the requested change. Preserve every",
+            "section, all copy, and all styling the user did not ask you to change — do not",
+            "regenerate the page from scratch.",
+            "",
+            "```html",
+            existing,
+            "```",
+            "",
+            "## Output Format — CRITICAL",
+            "Produce the COMPLETE contents of the updated `index.html`.",
+            "Output exactly one ```html fenced code block and nothing else.",
+        ].join("\n")
+        : [
+            spec.task,
+            "",
+            "## Output Format — CRITICAL",
+            "Produce the COMPLETE contents of a single file `index.html`.",
+            "Output exactly one ```html fenced code block and nothing else.",
+            "The document must be fully self-contained: <!DOCTYPE html>, <head> with a",
+            "single <style> block, <body> with the content, and a single <script> block",
+            "before </body>. It must render correctly when opened directly in a browser.",
+        ].join("\n")
 
     return {
         taskType: "web_page",
@@ -62,6 +95,7 @@ function webPageScaffold(spec: EnhancedSpec, root: string): Scaffold {
             path,
             instruction,
             verificationCriteria: "index.html is a complete, self-contained, valid HTML5 document",
+            changeType: existing ? "modify" : "create",
         }],
     }
 }
@@ -70,16 +104,33 @@ function reactComponentScaffold(spec: EnhancedSpec, root: string): Scaffold {
     const componentName = inferPascalName(rawTask(spec), "GeneratedComponent")
     const relativePath = `src/components/${componentName}.tsx`
     const path = join(root, relativePath)
-    const instruction = [
-        spec.task,
-        "",
-        "## Output Format — CRITICAL",
-        `Produce the COMPLETE contents of a single React component file \`${relativePath}\`.`,
-        `Output exactly one \`\`\`tsx:${relativePath} fenced code block and nothing else.`,
-        `Export \`${componentName}\` as the default export.`,
-        "Use an explicit Props interface, avoid unused imports, and keep the component",
-        "self-contained so it typechecks without relying on generated companion files.",
-    ].join("\n")
+    const existing = readExisting(path)
+    const instruction = existing
+        ? [
+            spec.task,
+            "",
+            `## This Is an ITERATIVE EDIT — ${relativePath} already exists`,
+            "The current content is below. Apply ONLY the requested change and preserve",
+            "everything else — do not regenerate the component from scratch.",
+            "",
+            "```tsx",
+            existing,
+            "```",
+            "",
+            "## Output Format — CRITICAL",
+            `Produce the COMPLETE updated contents of \`${relativePath}\`.`,
+            `Output exactly one \`\`\`tsx:${relativePath} fenced code block and nothing else.`,
+        ].join("\n")
+        : [
+            spec.task,
+            "",
+            "## Output Format — CRITICAL",
+            `Produce the COMPLETE contents of a single React component file \`${relativePath}\`.`,
+            `Output exactly one \`\`\`tsx:${relativePath} fenced code block and nothing else.`,
+            `Export \`${componentName}\` as the default export.`,
+            "Use an explicit Props interface, avoid unused imports, and keep the component",
+            "self-contained so it typechecks without relying on generated companion files.",
+        ].join("\n")
 
     return {
         taskType: "react_component",
@@ -87,6 +138,7 @@ function reactComponentScaffold(spec: EnhancedSpec, root: string): Scaffold {
             path,
             instruction,
             verificationCriteria: `${relativePath} typechecks and exports a default React component`,
+            changeType: existing ? "modify" : "create",
         }],
     }
 }
@@ -95,15 +147,32 @@ function cliScriptScaffold(spec: EnhancedSpec, root: string): Scaffold {
     const scriptName = inferKebabName(rawTask(spec), "tool")
     const relativePath = `scripts/${scriptName}.sh`
     const path = join(root, relativePath)
-    const instruction = [
-        spec.task,
-        "",
-        "## Output Format — CRITICAL",
-        `Produce the COMPLETE contents of a single executable shell script \`${relativePath}\`.`,
-        `Output exactly one \`\`\`bash:${relativePath} fenced code block and nothing else.`,
-        "Include a shebang, a --help path, clear argument parsing, and non-zero exits",
-        "for errors. Use POSIX-compatible shell where practical.",
-    ].join("\n")
+    const existing = readExisting(path)
+    const instruction = existing
+        ? [
+            spec.task,
+            "",
+            `## This Is an ITERATIVE EDIT — ${relativePath} already exists`,
+            "The current content is below. Apply ONLY the requested change and preserve",
+            "everything else — do not regenerate the script from scratch.",
+            "",
+            "```bash",
+            existing,
+            "```",
+            "",
+            "## Output Format — CRITICAL",
+            `Produce the COMPLETE updated contents of \`${relativePath}\`.`,
+            `Output exactly one \`\`\`bash:${relativePath} fenced code block and nothing else.`,
+        ].join("\n")
+        : [
+            spec.task,
+            "",
+            "## Output Format — CRITICAL",
+            `Produce the COMPLETE contents of a single executable shell script \`${relativePath}\`.`,
+            `Output exactly one \`\`\`bash:${relativePath} fenced code block and nothing else.`,
+            "Include a shebang, a --help path, clear argument parsing, and non-zero exits",
+            "for errors. Use POSIX-compatible shell where practical.",
+        ].join("\n")
 
     return {
         taskType: "cli_script",
@@ -111,6 +180,7 @@ function cliScriptScaffold(spec: EnhancedSpec, root: string): Scaffold {
             path,
             instruction,
             verificationCriteria: `${relativePath} is a complete executable CLI script with --help behavior`,
+            changeType: existing ? "modify" : "create",
         }],
     }
 }
@@ -119,15 +189,32 @@ function pythonScriptScaffold(spec: EnhancedSpec, root: string): Scaffold {
     const scriptName = inferSnakeName(rawTask(spec), "script")
     const relativePath = `scripts/${scriptName}.py`
     const path = join(root, relativePath)
-    const instruction = [
-        spec.task,
-        "",
-        "## Output Format — CRITICAL",
-        `Produce the COMPLETE contents of a single Python script \`${relativePath}\`.`,
-        `Output exactly one \`\`\`python:${relativePath} fenced code block and nothing else.`,
-        "Use argparse for CLI arguments, type hints for functions, a main() function,",
-        "and an if __name__ == \"__main__\" entry point.",
-    ].join("\n")
+    const existing = readExisting(path)
+    const instruction = existing
+        ? [
+            spec.task,
+            "",
+            `## This Is an ITERATIVE EDIT — ${relativePath} already exists`,
+            "The current content is below. Apply ONLY the requested change and preserve",
+            "everything else — do not regenerate the script from scratch.",
+            "",
+            "```python",
+            existing,
+            "```",
+            "",
+            "## Output Format — CRITICAL",
+            `Produce the COMPLETE updated contents of \`${relativePath}\`.`,
+            `Output exactly one \`\`\`python:${relativePath} fenced code block and nothing else.`,
+        ].join("\n")
+        : [
+            spec.task,
+            "",
+            "## Output Format — CRITICAL",
+            `Produce the COMPLETE contents of a single Python script \`${relativePath}\`.`,
+            `Output exactly one \`\`\`python:${relativePath} fenced code block and nothing else.`,
+            "Use argparse for CLI arguments, type hints for functions, a main() function,",
+            "and an if __name__ == \"__main__\" entry point.",
+        ].join("\n")
 
     return {
         taskType: "python_script",
@@ -135,6 +222,7 @@ function pythonScriptScaffold(spec: EnhancedSpec, root: string): Scaffold {
             path,
             instruction,
             verificationCriteria: `${relativePath} is syntactically valid Python with a main entry point`,
+            changeType: existing ? "modify" : "create",
         }],
     }
 }
@@ -194,9 +282,10 @@ export function toPlan(scaffold: Scaffold, decompositionLevel: number): Plan {
     const steps: PlanStep[] = scaffold.files.map(f => ({
         description: f.instruction,
         targetFiles: [f.path],
-        changeType: "create",
+        changeType: f.changeType,
         dependencies: [],
         verificationCriteria: f.verificationCriteria,
+        creative: scaffold.taskType === "web_page",
     }))
     return { steps, decompositionLevel }
 }
