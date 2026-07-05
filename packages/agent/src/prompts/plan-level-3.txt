@@ -5,6 +5,16 @@ Each step must:
 - Touch 1–2 files
 - Do one focused change (one function, one module slice)
 
+Prefer modifying existing files over creating new ones. Don't add tests,
+config, or scaffolding beyond what the task actually needs.
+
+## Repo Map
+
+{REPO_MAP}
+
+targetFiles should be real paths from the map above when the step modifies
+existing code; only use a new path when changeType is "create".
+
 ## Task
 
 {TASK}

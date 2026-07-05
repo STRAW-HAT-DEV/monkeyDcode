@@ -14,6 +14,11 @@ export interface MdcConfig {
     }
     consistency: {
         maxRetries: number
+        /** Per-candidate repair attempts before falling back to a full resample.
+         *  Feeding a failing candidate its own exact verification errors and
+         *  asking for a minimal fix is far cheaper and more reliable — especially
+         *  for weak models — than discarding it and generating from scratch. */
+        maxRepairAttempts: number
     }
     context: {
         autoCompactEvery: number
@@ -29,7 +34,7 @@ export const DEFAULT_CONFIG: MdcConfig = {
         stages: ["syntax", "typecheck", "lint", "tests"],
         testTimeout: 120,
     },
-    consistency: { maxRetries: 3 },
+    consistency: { maxRetries: 3, maxRepairAttempts: 2 },
     context: { autoCompactEvery: 5 },
 }
 
@@ -107,6 +112,9 @@ export async function loadConfig(): Promise<MdcConfig> {
             },
             consistency: {
                 maxRetries: Number(c.max_retries ?? DEFAULT_CONFIG.consistency.maxRetries),
+                maxRepairAttempts: Number(
+                    c.max_repair_attempts ?? DEFAULT_CONFIG.consistency.maxRepairAttempts,
+                ),
             },
             context: {
                 autoCompactEvery: Number(
@@ -143,6 +151,7 @@ export async function saveConfig(config: MdcConfig): Promise<void> {
         "",
         "[consistency]",
         `max_retries = ${config.consistency.maxRetries}`,
+        `max_repair_attempts = ${config.consistency.maxRepairAttempts}`,
         "",
         "[context]",
         `auto_compact_every = ${config.context.autoCompactEvery}`,

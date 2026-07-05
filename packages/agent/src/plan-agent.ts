@@ -3,9 +3,10 @@ import { LLM } from "@monkeydcode/llm"
 import * as Capability from "@monkeydcode/consistency/model-capability/detector"
 import type { ModelRef } from "@monkeydcode/llm"
 import { readFile } from "fs/promises"
+import { existsSync } from "fs"
 import { join } from "path"
 import { fileURLToPath } from "url"
-import { wrapReAct } from "./react.ts"
+import * as RepoMap from "./repo-map.ts"
 
 const PROMPTS_DIR = join(fileURLToPath(import.meta.url), "../prompts")
 
@@ -52,7 +53,15 @@ export function plan(task: string, model: ModelRef, modelId: string): Effect.Eff
     return Effect.gen(function* () {
         const level = yield* Capability.detect(model)
         const promptTemplate = yield* loadPrompt(level)
-        const filledPrompt = wrapReAct(promptTemplate.replace("{TASK}", task))
+        const repoMap = yield* Effect.promise(() => RepoMap.generate(process.cwd()))
+        // No ReAct wrapper here: this prompt demands "output ONLY the JSON
+        // array" — layering "Begin with Thought:" prose on top made the model
+        // receive two contradictory output-format instructions at once and
+        // obey either at random, which is why parseStepsFromResponse needed 5
+        // fallback strategies in the first place.
+        const filledPrompt = promptTemplate
+            .replace("{TASK}", task)
+            .replace("{REPO_MAP}", repoMap)
 
         const response = yield* Effect.promise(() =>
             LLM.generateAsync({
@@ -61,8 +70,24 @@ export function plan(task: string, model: ModelRef, modelId: string): Effect.Eff
             })
         )
 
-        const steps = enforceLevelConstraints(parseStepsFromResponse(response.text, task), level)
+        const steps = enforceLevelConstraints(
+            correctChangeTypes(parseStepsFromResponse(response.text, task)),
+            level,
+        )
         return { steps, decompositionLevel: level }
+    })
+}
+
+/** A model can declare "modify"/"delete" on a path that doesn't actually
+ *  exist (hallucination, or it invented a plausible-looking file the repo map
+ *  rule was meant to prevent but a weak model ignored anyway). You cannot
+ *  modify or delete something that isn't there — correct it to "create"
+ *  rather than let the step fail confusingly later in the build pipeline. */
+function correctChangeTypes(steps: PlanStep[]): PlanStep[] {
+    return steps.map(step => {
+        if (step.changeType === "create") return step
+        const allMissing = step.targetFiles.length > 0 && step.targetFiles.every(f => !existsSync(f))
+        return allMissing ? { ...step, changeType: "create" as const } : step
     })
 }
 

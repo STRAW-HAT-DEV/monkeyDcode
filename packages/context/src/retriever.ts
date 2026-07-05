@@ -13,10 +13,15 @@ interface WorkingMemoryStep {
     files?: string[]
 }
 
+export interface GraphNeighbor {
+    file: string
+    signatures: SignatureIndex.Signature[]
+}
+
 export interface AssembledContext {
     signatures: SignatureIndex.Signature[]
     relatedExamples: string[]
-    graphNeighbors: string[]
+    graphNeighbors: GraphNeighbor[]
     workingMemory: {
         currentGoal: string
         completedSteps: WorkingMemoryStep[]
@@ -81,7 +86,21 @@ export function retrieve(
                 }),
             ),
         )
-        const graphNeighbors = neighborArrays.flat().slice(0, maxNeighbors(level))
+        const neighborFiles = [...new Set(neighborArrays.flat())].slice(0, maxNeighbors(level))
+        // A bare file path tells the model nothing it can act on — it still has
+        // to invent function names/signatures for anything it wants to call in
+        // a related file. Pulling the same signature extraction used for the
+        // target files lets the model reference what actually exists instead
+        // of hallucinating an API on a file it never saw.
+        const graphNeighbors: GraphNeighbor[] = await Promise.all(
+            neighborFiles.map(async f => ({
+                file: f,
+                signatures: await Effect.runPromise(SignatureIndex.extractSignatures(f)).catch(err => {
+                    console.warn(`[retriever] signature extraction failed for neighbor ${f}:`, err)
+                    return [] as SignatureIndex.Signature[]
+                }),
+            })),
+        )
         const wm = await loadWorkingMemory()
 
         return {
@@ -110,16 +129,23 @@ export function formatForPrompt(ctx: AssembledContext): string {
     }
 
     if (ctx.relatedExamples.length > 0) {
+        // Explicit instruction, not just "here are some examples" — this is
+        // the difference between the model noticing conventions and actually
+        // being told to match them (naming, import style, test structure).
         parts.push(
-            "## Related Code Examples\n" +
+            "## Related Code Examples — MATCH this project's existing style, imports, and test patterns; do not introduce a different convention\n" +
             ctx.relatedExamples.join("\n---\n"),
         )
     }
 
     if (ctx.graphNeighbors.length > 0) {
         parts.push(
-            "## Related Files (dependency graph)\n" +
-            ctx.graphNeighbors.join("\n"),
+            "## Related Files (dependency graph) — use these exact signatures, don't invent your own for existing functions\n" +
+            ctx.graphNeighbors
+                .map(n => n.signatures.length > 0
+                    ? `${n.file}:\n` + n.signatures.map(s => `  - ${s.name}${s.parameters} (line ${s.line})`).join("\n")
+                    : n.file)
+                .join("\n"),
         )
     }
 

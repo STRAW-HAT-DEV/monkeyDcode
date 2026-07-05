@@ -1,8 +1,9 @@
 import { distance } from "fastest-levenshtein"
 import { treeSitter } from "@monkeydcode/python-bridge"
 import { LLM } from "@monkeydcode/llm"
-import type { ModelRef } from "@monkeydcode/llm"
+import type { ModelRef, ContentPart } from "@monkeydcode/llm"
 import type { VerificationResult } from "./verification/types.ts"
+import * as Screenshot from "./verification/screenshot.ts"
 
 export interface GradedCandidate {
     change: string
@@ -62,34 +63,76 @@ async function gradeCreative(
     })
 }
 
-/** LLM-as-judge rubric score for design/creative output. Explicitly instructed
- *  not to reward genericness, since that's the failure mode being fixed. */
+const CREATIVE_RUBRIC =
+    "Rate the following generated artifact from 0.0 to 1.0 on design/creative " +
+    "quality: visual hierarchy, brand coherence, whitespace/layout balance, and " +
+    "whether the copy feels intentional rather than generic placeholder text. " +
+    "Do NOT reward genericness or blandness as \"safe\" — a distinctive, " +
+    "well-composed result should score higher than a bland but conventional one. " +
+    "Respond with ONLY a number between 0 and 1, nothing else."
+
+function parseJudgeScore(text: string): number {
+    const match = text.match(/(\d*\.?\d+)/)
+    const score = match ? parseFloat(match[1]!) : NaN
+    // Judge output didn't parse — neutral score. 0 would unfairly tank an
+    // otherwise valid candidate; 1 would rubber-stamp everything.
+    return Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0.6
+}
+
+/** LLM-as-judge rubric score for design/creative output. Renders the artifact
+ *  and judges the actual screenshot when possible (Playwright installed) —
+ *  the only way to catch layout/visual problems no amount of reading markup
+ *  reveals. Falls back to judging the raw source when rendering isn't
+ *  available, which still beats the old code-smell heuristic (console.log
+ *  counting) that had no bearing on design quality at all. */
 async function judgeCreativeQuality(change: string, model: ModelRef): Promise<number> {
     const code = extractPrimaryCodeBlock(change)
+    const looksLikeHtml = /<html[\s>]|<!DOCTYPE html/i.test(code)
+
+    if (looksLikeHtml) {
+        try {
+            const screenshot = await Screenshot.screenshotHtml(code)
+            // Not every model that generated the code can also judge an
+            // image (a local text-only model, for instance) — if the vision
+            // call fails for any reason, fall back to text judging rather
+            // than a flat neutral score that would fail to differentiate
+            // any of the candidates.
+            if (screenshot) return await judgeVisual(screenshot, model)
+        } catch {
+            // fall through to text judging below
+        }
+    }
+
     try {
-        const response = await LLM.generateAsync({
-            model,
-            messages: [{
-                role: "user",
-                content:
-                    "Rate the following generated artifact from 0.0 to 1.0 on design/creative " +
-                    "quality: visual hierarchy, brand coherence, whitespace/layout balance, and " +
-                    "whether the copy feels intentional rather than generic placeholder text. " +
-                    "Do NOT reward genericness or blandness as \"safe\" — a distinctive, " +
-                    "well-composed result should score higher than a bland but conventional one. " +
-                    "Respond with ONLY a number between 0 and 1, nothing else.\n\n" +
-                    "```\n" + code.slice(0, 6000) + "\n```",
-            }],
-            temperature: 0,
-        })
-        const match = response.text.match(/(\d*\.?\d+)/)
-        const score = match ? parseFloat(match[1]!) : NaN
-        return Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0.6
+        return await judgeText(code, model)
     } catch {
-        // Judge call failed — neutral score. 0 would unfairly tank an otherwise
-        // valid candidate; 1 would rubber-stamp everything.
         return 0.6
     }
+}
+
+async function judgeVisual(screenshot: Screenshot.Screenshot, model: ModelRef): Promise<number> {
+    const content: ContentPart[] = [
+        { type: "text", text: CREATIVE_RUBRIC },
+        { type: "image", source: { type: "base64", mediaType: screenshot.mediaType, data: screenshot.base64 } },
+    ]
+    const response = await LLM.generateAsync({
+        model,
+        messages: [{ role: "user", content }],
+        temperature: 0,
+    })
+    return parseJudgeScore(response.text)
+}
+
+async function judgeText(code: string, model: ModelRef): Promise<number> {
+    const response = await LLM.generateAsync({
+        model,
+        messages: [{
+            role: "user",
+            content: `${CREATIVE_RUBRIC}\n\n\`\`\`\n${code.slice(0, 6000)}\n\`\`\``,
+        }],
+        temperature: 0,
+    })
+    return parseJudgeScore(response.text)
 }
 
 function grade(

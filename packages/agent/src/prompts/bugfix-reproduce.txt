@@ -4,6 +4,8 @@ Write a minimal failing test that reproduces this bug. The test must:
 3. Be self-contained — no external dependencies beyond what's already in the project
 4. Have a descriptive name that explains what the bug is
 
+Framework: {FRAMEWORK_HINT}
+
 Bug report:
 {REPORT}
 

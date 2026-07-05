@@ -1,6 +1,6 @@
 export * from "./orchestrator.ts"
 export * from "./registry.ts"
-export * from "./react.ts"
+export * as ToolLoop from "./tool-loop.ts"
 export * from "./status.ts"
 export * from "./review-agent.ts"
 export * from "./plan-agent.ts"

@@ -35,6 +35,65 @@ async function runInner(projectRoot: string): Promise<StageResult> {
     return { passed: false, errors, durationMs: Date.now() - start }
 }
 
+export interface LanguageProfile {
+    /** File extension/suffix convention for a new test file, e.g. "test.ts". */
+    testFileSuffix: string
+    /** Directory (relative to project root) new tests conventionally live in. */
+    testDir: string
+    /** Fence language tag for code blocks, e.g. "typescript". */
+    codeFence: string
+    /** One-line guidance for prompts asking a model to write a test in this project. */
+    frameworkHint: string
+}
+
+/**
+ * Detect the project's language/test convention by the same markers
+ * detectTestRunner uses, so a bug-repro test (or any other generated test)
+ * lands in the right language and framework instead of always being TS —
+ * previously a Python project would get a `.test.ts` file written into it.
+ */
+export function detectLanguageProfile(projectRoot: string): LanguageProfile {
+    if (existsSync(join(projectRoot, "pyproject.toml")) || existsSync(join(projectRoot, "setup.py"))) {
+        return {
+            testFileSuffix: "test.py",
+            testDir: "tests",
+            codeFence: "python",
+            frameworkHint: "Use pytest: a `def test_...():` function using plain `assert` statements.",
+        }
+    }
+    if (existsSync(join(projectRoot, "Cargo.toml"))) {
+        return {
+            testFileSuffix: "test.rs",
+            testDir: "tests",
+            codeFence: "rust",
+            frameworkHint: "Use a `#[test]` function; `cargo test` runs it.",
+        }
+    }
+    if (existsSync(join(projectRoot, "go.mod"))) {
+        return {
+            testFileSuffix: "_test.go",
+            testDir: ".",
+            codeFence: "go",
+            frameworkHint: "Use a `Test...(t *testing.T)` function from the `testing` package; `go test ./...` runs it.",
+        }
+    }
+    // Default: TS/JS. Prefer the project's own configured test script if present.
+    const pkgPath = join(projectRoot, "package.json")
+    let frameworkHint = 'Use `import { test, expect } from "bun:test"` unless the project already uses another test framework — match what exists.'
+    try {
+        if (existsSync(pkgPath)) {
+            const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"))
+            const testScript: string = pkg?.scripts?.test ?? ""
+            if (testScript && !testScript.includes("bun test")) {
+                frameworkHint = `The project's test script is "${testScript}" — match its framework's conventions (imports, assertion style), not bun:test.`
+            }
+        }
+    } catch {
+        // Malformed package.json — fall back to the bun:test default hint.
+    }
+    return { testFileSuffix: "test.ts", testDir: "test", codeFence: "typescript", frameworkHint }
+}
+
 interface TestRunner {
     command: ReturnType<typeof $>
     parse: (output: string) => VerificationError[]

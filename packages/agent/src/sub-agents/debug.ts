@@ -7,6 +7,7 @@ import { fileURLToPath } from "url"
 import { $ } from "bun"
 import * as PlanAgent from "../plan-agent.ts"
 import * as BuildAgent from "../build-agent.ts"
+import { parseJsonArray } from "../utils.ts"
 
 const PROMPTS = join(fileURLToPath(import.meta.url), "../../prompts")
 
@@ -90,11 +91,7 @@ function gatherContext(files: string[]): Effect.Effect<string, unknown> {
 }
 
 function parseHypotheses(text: string): Hypothesis[] {
-    try {
-        const match = text.match(/\[[\s\S]*\]/)
-        if (match) return JSON.parse(match[0]) as Hypothesis[]
-    } catch {}
-    return []
+    return parseJsonArray<Hypothesis>(text)
 }
 
 function testHypothesis(h: Hypothesis, model: ModelRef): Effect.Effect<boolean, unknown> {

@@ -5,22 +5,24 @@ Each step should:
 - Touch 1–3 related files
 - Be independently verifiable
 
+Prefer modifying existing files over creating new ones. Don't add tests,
+config, or scaffolding beyond what the task actually needs.
+
+## Repo Map
+
+{REPO_MAP}
+
+targetFiles should be real paths from the map above when the step modifies
+existing code; only use a new path when changeType is "create".
+
 ## Task
 
 {TASK}
 
 ## Output — JSON array only
 
-```json
-[
-  {
-    "description": "what to do",
-    "targetFiles": ["path/to/file.ts"],
-    "changeType": "create" | "modify" | "delete",
-    "dependencies": [],
-    "verificationCriteria": "how to verify"
-  }
-]
-```
+Each step needs: description, targetFiles, changeType ("create" | "modify" |
+"delete"), dependencies, verificationCriteria. Use your judgment on step
+granularity within the 2-3 step target.
 
 Output ONLY the JSON array:

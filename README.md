@@ -45,8 +45,9 @@ mdc "Add pagination to the users API"
 bun install
 bun run typecheck
 bun run test
-bun run bench               # benchmarks with consistency engine (needs Ollama + models)
-bun run bench:baseline      # A/B without consistency engine
+bun run bench               # full agent (consistency engine on)
+bun run bench:baseline      # one-shot with prompt engineering, no sampling/voting
+bun run bench:raw           # the floor — same model, zero scaffolding (run this first; other modes report uplift against it)
 bun run bench:verify-only   # offline — validates expected benchmark solutions
 bun run bench:compare       # compare two benchmark result JSON files
 

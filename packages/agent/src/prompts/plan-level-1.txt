@@ -5,25 +5,26 @@ Each step should be:
 - Independently verifiable
 - Ordered correctly so later steps can build on earlier ones
 
+Prefer modifying existing files over creating new ones. Don't add tests, config,
+or scaffolding beyond what the task actually needs.
+
+## Repo Map
+
+{REPO_MAP}
+
+targetFiles should be real paths from the map above when the step modifies
+existing code; only use a new path when changeType is "create".
+
 ## Task
 
 {TASK}
 
 ## Output
 
-Return a JSON array of steps. Each step:
-
-```json
-[
-  {
-    "description": "precise description of what changes and why",
-    "targetFiles": ["exact/file/paths.ts"],
-    "changeType": "create" | "modify" | "delete",
-    "dependencies": [0, 1],
-    "verificationCriteria": "specific check: tsc passes / test X passes / endpoint returns Y"
-  }
-]
-```
+Return a JSON array of steps with: description, targetFiles, changeType
+("create" | "modify" | "delete"), dependencies (indices of steps this depends
+on), verificationCriteria. You know this schema — use your own judgment on
+step granularity rather than following a rigid template.
 
 Group related changes into the same step when they are tightly coupled.
 Order steps so each step's dependencies are satisfied by prior steps.
