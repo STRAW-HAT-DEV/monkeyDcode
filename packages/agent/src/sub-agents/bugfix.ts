@@ -1,11 +1,12 @@
 import { Effect } from "effect"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
-import { readFile, writeFile } from "fs/promises"
-import { join } from "path"
+import { readFile, writeFile, mkdir } from "fs/promises"
+import { join, dirname } from "path"
 import { fileURLToPath } from "url"
 import { $ } from "bun"
 import * as Pipeline from "@monkeydcode/consistency/verification/pipeline"
+import { detectLanguageProfile } from "@monkeydcode/consistency/verification/test-existing"
 import * as PlanAgent from "../plan-agent.ts"
 import * as BuildAgent from "../build-agent.ts"
 
@@ -21,6 +22,10 @@ export function fix(report: BugReport, model: ModelRef, modelId: string): Effect
     return Effect.gen(function* () {
         const suspectFiles = report.suspectFiles ?? (yield* localize(report))
         const projectRoot = process.cwd()
+        // Detect the project's actual language/test framework instead of
+        // hardcoding TS/bun:test — a Python or Rust project used to get a
+        // `.test.ts` file written into it regardless of what it's written in.
+        const lang = detectLanguageProfile(projectRoot)
 
         // Step 1 — Write a failing test that reproduces the bug
         const reproPrompt = yield* Effect.tryPromise(() =>
@@ -34,14 +39,18 @@ export function fix(report: BugReport, model: ModelRef, modelId: string): Effect
                     content: reproPrompt
                         .replace("{REPORT}", report.error)
                         .replace("{STACK}", report.stack ?? "none")
-                        .replace("{FILES}", suspectFiles.join(", ")),
+                        .replace("{FILES}", suspectFiles.join(", "))
+                        .replace("{FRAMEWORK_HINT}", lang.frameworkHint),
                 }],
             })
         )
 
         const testCode = extractCode(reproResponse.text)
-        const testFile = join(projectRoot, "test", "bugfix-repro.test.ts")
-        yield* Effect.tryPromise(() => writeFile(testFile, testCode))
+        const testFile = join(projectRoot, lang.testDir, `bugfix-repro.${lang.testFileSuffix}`)
+        yield* Effect.tryPromise(async () => {
+            await mkdir(dirname(testFile), { recursive: true })
+            await writeFile(testFile, testCode)
+        })
 
         // Step 2 — Fix the bug using the plan → build pipeline
         const fixPlan = yield* PlanAgent.plan(

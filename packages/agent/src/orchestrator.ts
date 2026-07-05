@@ -21,6 +21,7 @@ import * as Debug from "./sub-agents/debug.ts"
 import * as Status from "./status.ts"
 import * as WorkingMemory from "./working-memory.ts"
 import * as Changes from "./changes.ts"
+import * as RepoMap from "./repo-map.ts"
 
 const PROMPTS = join(fileURLToPath(import.meta.url), "../prompts")
 
@@ -38,7 +39,7 @@ export function handle(
         yield* WorkingMemory.setGoal(message)
         Status.emit({ agent: "luffy", action: "Classifying request..." })
 
-        const category = yield* classify(message, model)
+        const category = yield* classify(message, model, history)
 
         // Fast path: conversational input never touches the build/verify/review pipeline.
         // History gives the agent memory of what it did in earlier turns.
@@ -48,6 +49,14 @@ export function handle(
             Status.emit({ agent: "idle", action: "Done" })
             return reply
         }
+
+        // Every other branch used to receive only the bare `message`, with no
+        // access to `history` at all — so a follow-up like "change the hero
+        // image" that got classified as an edit (not "chat") ran completely
+        // blind to what was built in earlier turns. Fold recent history into
+        // the task text so it reaches the enhancer/scaffold/planner/sub-agents
+        // without having to thread a `history` param through all of them.
+        const augmentedMessage = message + formatHistoryContext(history)
 
         // Reset the per-task write tracker so we can report exactly what changed.
         Changes.reset()
@@ -60,11 +69,11 @@ export function handle(
         switch (category) {
             case "bug_fix":
                 Status.emit({ agent: "zoro", action: "Hunting the bug..." })
-                yield* BugFix.fix({ error: message }, model, modelId)
+                yield* BugFix.fix({ error: augmentedMessage }, model, modelId)
                 break
 
             case "feature": {
-                const scaffolded = yield* tryScaffold(message, model, modelId)
+                const scaffolded = yield* tryScaffold(augmentedMessage, model, modelId)
                 if (!scaffolded.handled) {
                     Status.emit({ agent: "nami", action: "Charting feature plan..." })
                     yield* Feature.build(scaffolded.task, model, modelId)
@@ -75,17 +84,17 @@ export function handle(
             case "refactor": {
                 const target = extractTarget(message)
                 Status.emit({ agent: "sanji", action: `Refactoring ${target}...` })
-                yield* Refactor.refactor(target, message, model, modelId)
+                yield* Refactor.refactor(target, augmentedMessage, model, modelId)
                 break
             }
 
             case "debug":
                 Status.emit({ agent: "usopp", action: "Testing hypotheses..." })
-                yield* Debug.debug(message, model, modelId)
+                yield* Debug.debug(augmentedMessage, model, modelId)
                 break
 
             default: {
-                const scaffolded = yield* tryScaffold(message, model, modelId)
+                const scaffolded = yield* tryScaffold(augmentedMessage, model, modelId)
                 if (!scaffolded.handled) {
                     Status.emit({ agent: "luffy", action: "Creating plan..." })
                     const plan = yield* PlanAgent.plan(scaffolded.task, model, modelId)
@@ -108,6 +117,9 @@ export function handle(
             Status.emit({ agent: "idle", action: "Done" })
             return `Done (${category}). No file changes were produced.`
         }
+        // The next plan() call in this session should see files this task just
+        // created/modified, not a repo map cached from before the task ran.
+        RepoMap.invalidate(process.cwd())
 
         const fileList = formatFileList(changed)
 
@@ -221,6 +233,31 @@ function tryScaffold(
     })
 }
 
+/** Plain-text rendering of a Message's content, whether it's a bare string or
+ *  a ContentPart array (tool calls/results/images render as a type tag). */
+function messageText(m: Message): string {
+    return typeof m.content === "string"
+        ? m.content
+        : m.content.map(p => (p.type === "text" ? p.text : `[${p.type}]`)).join(" ")
+}
+
+/** Condense recent turns into a short block so execution branches (bug_fix,
+ *  feature, refactor, debug, generic plan) know what earlier turns already
+ *  built, without needing a `history` parameter threaded through every
+ *  sub-agent and the scaffold/enhancer/planner chain. */
+function formatHistoryContext(history: Message[]): string {
+    if (history.length === 0) return ""
+    const recent = history.slice(-10)
+    const lines = recent.map(m => `${m.role}: ${messageText(m).slice(0, 1000)}`)
+    return (
+        "\n\n## Recent Conversation\n" +
+        "You may have already created or changed files described below in an earlier " +
+        "turn — treat this as an iterative change to that work, not a fresh start, " +
+        "unless the request clearly describes something new.\n" +
+        lines.join("\n")
+    )
+}
+
 function chatReply(
     message: string,
     model: ModelRef,
@@ -250,17 +287,43 @@ function chatReply(
     })
 }
 
-function classify(message: string, model: ModelRef): Effect.Effect<Category, unknown> {
+// Deterministic pre-pass: a greeting or a literal stack trace never needs an
+// LLM round-trip to classify, and — more importantly — a weak model asked to
+// classify "hi" or a traceback occasionally gets it wrong, which for a
+// traceback means it skips straight to the history-blind build path instead
+// of "debug". Rules can't misroute the unambiguous cases; only ambiguous
+// messages reach the model at all.
+const GREETING_PATTERN = /^\s*(hi|hello|hey|yo|sup|thanks|thank you|good (morning|afternoon|evening))[\s!.,]*$/i
+const STACK_TRACE_PATTERN = /at .+?:\d+:\d+\)?|Traceback \(most recent call last\)|File "[^"]+", line \d+|\bin <module>\b/
+
+function deterministicClassify(message: string): Category | null {
+    const trimmed = message.trim()
+    if (trimmed.length === 0) return "chat"
+    if (GREETING_PATTERN.test(trimmed)) return "chat"
+    if (STACK_TRACE_PATTERN.test(message)) return "debug"
+    return null
+}
+
+function classify(message: string, model: ModelRef, history: Message[] = []): Effect.Effect<Category, unknown> {
     return Effect.gen(function* () {
+        const deterministic = deterministicClassify(message)
+        if (deterministic) return deterministic
+
         const template = yield* Effect.tryPromise(() =>
             readFile(join(PROMPTS, "classify.txt"), "utf-8"),
         )
+        // "now make the hero bigger" is unclassifiable in isolation — recent
+        // turns are what tell the model this is a follow-up edit, not a
+        // standalone ambiguous request.
+        const historyBlock = history.length > 0
+            ? history.slice(-2).map(m => `${m.role}: ${messageText(m).slice(0, 300)}`).join("\n")
+            : "(none — this is the first message in the conversation)"
         const response = yield* Effect.promise(() =>
             LLM.generateAsync({
                 model,
                 messages: [{
                     role: "user",
-                    content: template.replace("{MESSAGE}", message),
+                    content: template.replace("{MESSAGE}", message).replace("{HISTORY}", historyBlock),
                 }],
             }),
         )

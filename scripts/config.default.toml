@@ -12,6 +12,7 @@ test_timeout = 120
 
 [consistency]
 max_retries = 3
+max_repair_attempts = 2
 
 [context]
 auto_compact_every = 5
