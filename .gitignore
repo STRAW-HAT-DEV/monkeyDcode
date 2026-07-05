@@ -53,3 +53,5 @@ tools/**/__pycache__
 
 # Internal planning doc — not for the public repo
 ROADMAP.md
+# Added by code-review-graph
+.code-review-graph/
