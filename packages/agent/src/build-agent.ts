@@ -20,7 +20,7 @@ import * as WorkingMemory from "./working-memory.ts"
 import * as Status from "./status.ts"
 import * as Changes from "./changes.ts"
 import { assertCanWrite } from "./registry.ts"
-import { wrapReAct } from "./react.ts"
+import * as ToolLoop from "./tool-loop.ts"
 
 export type { Plan, PlanStep }
 
@@ -60,7 +60,16 @@ function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: nu
             { capabilityLevel },
         )
 
-        const prompt = wrapReAct(buildExecutionPrompt(step, context))
+        // Recon: let the model look before it writes (real file reads, repo
+        // search, diagnostics) instead of generating blind off a single
+        // completion. Skipped for creative/greenfield artifacts (a landing
+        // page has nothing meaningful to investigate) to avoid a wasted
+        // round-trip where it can't help.
+        const reconTranscript = step.creative
+            ? ""
+            : yield* gatherRecon(step, context, model)
+
+        const prompt = buildExecutionPrompt(step, context, capabilityLevel, reconTranscript)
 
         const result = yield* Sampler.sample({
             prompt,
@@ -79,6 +88,48 @@ function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: nu
             description: step.description,
             files: step.targetFiles,
         })
+    })
+}
+
+// ─── Recon ───────────────────────────────────────────────────────────────────
+
+/**
+ * Run the bounded tool loop once per step (not once per sampled candidate —
+ * that would multiply cost by the temperature count for no extra benefit,
+ * since all candidates should share the same grounding). Its literal "answer"
+ * is discarded; only the accumulated Action/Observation transcript is kept
+ * and folded into the real generation prompt below, which the existing
+ * multi-candidate sampler still verifies and grades exactly as before.
+ *
+ * If the model never investigates (the common case for a fully-specified,
+ * small step) this costs exactly one extra completion and returns "" —
+ * degrading gracefully to the pre-recon behavior, not adding failure surface.
+ */
+function gatherRecon(
+    step: PlanStep,
+    context: Retriever.AssembledContext,
+    model: ModelRef,
+): Effect.Effect<string, unknown> {
+    return Effect.gen(function* () {
+        const reconPrompt = `${Retriever.formatForPrompt(context)}
+
+## Task
+${step.description}
+
+## Target Files
+${step.targetFiles.join("\n")}
+
+Investigate using READ/GREP/RUN if it would help you understand the existing
+code, project conventions, or related files before making this change. If you
+already have everything you need, respond with a one-line summary of your
+plan — do NOT write the final code in this step.`
+
+        const projectRoot = Sampler.detectProjectRoot(step.targetFiles)
+        const outcome = yield* Effect.catch(
+            ToolLoop.run(reconPrompt, { model, projectRoot, maxIterations: 4 }),
+            () => Effect.succeed({ finalText: "", transcript: "", iterations: 0 }),
+        )
+        return outcome.transcript
     })
 }
 
@@ -112,10 +163,56 @@ function readExistingTargets(files: string[]): string {
         : ""
 }
 
-function buildExecutionPrompt(step: PlanStep, context: Retriever.AssembledContext): string {
+// Hashline's tag/range DSL is exactly the kind of format a weak model fumbles
+// — one bad range number silently corrupts an edit. For capability level >= 5
+// (weak models) and files small enough to regenerate wholesale, a full-file
+// rewrite is unfumblable: there is no range arithmetic to get wrong. Strong
+// models and large files keep hashline, where its surgical-edit efficiency
+// (touch 3 lines of a 2000-line file, not resend it) actually matters.
+const FULL_REWRITE_CAPABILITY_LEVEL = 5
+const FULL_REWRITE_LINE_THRESHOLD = 150
+
+function shouldUseFullRewrite(targetFiles: string[], capabilityLevel: number): boolean {
+    if (capabilityLevel < FULL_REWRITE_CAPABILITY_LEVEL) return false
+    return targetFiles.every(f => {
+        if (!existsSync(f)) return true
+        try {
+            return readFileSync(f, "utf-8").split("\n").length <= FULL_REWRITE_LINE_THRESHOLD
+        } catch {
+            return false
+        }
+    })
+}
+
+function outputFormatSection(targetFiles: string[], capabilityLevel: number): string {
+    if (shouldUseFullRewrite(targetFiles, capabilityLevel)) {
+        return [
+            "Output the COMPLETE contents of each target file — a full rewrite, not a patch.",
+            "Use one ```lang:path/to/file fenced code block per file, containing the ENTIRE file.",
+            "Preserve everything in the current content shown above that you were not asked to change.",
+        ].join("\n")
+    }
+    return [
+        HASHLINE_EDIT_PROMPT,
+        "",
+        "For EXISTING files shown above with a [path#TAG] header: output hashline patches in ```hashline fences referencing that exact tag (NOT full-file rewrites).",
+        "For NEW files with no header above (they don't exist yet): use ```typescript:path/to/file.ts with complete contents.",
+    ].join("\n")
+}
+
+function buildExecutionPrompt(
+    step: PlanStep,
+    context: Retriever.AssembledContext,
+    capabilityLevel: number,
+    reconTranscript: string,
+): string {
     const fileList = step.targetFiles.join("\n")
     const existingContent = readExistingTargets(step.targetFiles)
-    return `${Retriever.formatForPrompt(context)}
+    const recon = reconTranscript
+        ? `\n\n## Investigation Findings (already gathered — do not re-investigate)\n${reconTranscript}`
+        : ""
+
+    return `${Retriever.formatForPrompt(context)}${recon}
 
 ${existingContent}
 
@@ -129,12 +226,9 @@ ${fileList}
 ${step.verificationCriteria}
 
 ## Output Format — CRITICAL
-${HASHLINE_EDIT_PROMPT}
+${outputFormatSection(step.targetFiles, capabilityLevel)}
 
-For EXISTING files shown above with a [path#TAG] header: output hashline patches in \`\`\`hashline fences referencing that exact tag (NOT full-file rewrites).
-For NEW files with no header above (they don't exist yet): use \`\`\`typescript:path/to/file.ts with complete contents.
-
-Target file paths (use in [path#TAG] after read):
+Target file paths:
 ${fileList}`
 }
 

@@ -24,6 +24,7 @@
         "lint": "biome check .",
         "bench": "bun run benchmarks/run.ts",
         "bench:baseline": "MDCODE_NO_CONSISTENCY=1 bun run benchmarks/run.ts",
+        "bench:raw": "MDCODE_RAW=1 bun run benchmarks/run.ts",
         "bench:task": "bun run benchmarks/run.ts --task",
         "bench:model": "bun run benchmarks/run.ts --model",
         "bench:verify-only": "bun run benchmarks/run.ts --verify-only",

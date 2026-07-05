@@ -47,3 +47,9 @@ tools/**/__pycache__
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Per-run sampler telemetry (generated; not source)
+.monkeydcode/telemetry/
+
+# Internal planning doc — not for the public repo
+ROADMAP.md

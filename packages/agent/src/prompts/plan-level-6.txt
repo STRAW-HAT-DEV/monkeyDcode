@@ -8,6 +8,16 @@ Each step must:
 - Do ONE thing only (one function, one import, one field)
 - Be doable without any other step being done first (unless you declare a dependency)
 
+Prefer modifying existing files over creating new ones. Do not create tests,
+config files, or extra scaffolding unless the task clearly asks for them.
+
+## Repo Map
+
+{REPO_MAP}
+
+targetFiles should be real paths from the map above when the step modifies
+existing code. Only invent a new path when changeType is "create".
+
 ## Task
 
 {TASK}

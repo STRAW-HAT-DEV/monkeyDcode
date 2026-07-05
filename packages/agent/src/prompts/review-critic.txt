@@ -21,4 +21,12 @@ Output JSON with this exact shape:
 }
 
 Be ruthless. A false positive wastes developer time. A missed issue ships a bug.
+
+If EVERY issue the first reviewer found is a false positive, put all of them
+under false_positives and leave validated as an empty array []. An empty
+validated list is a valid, good outcome when the diff has no real problems —
+do not keep an issue in validated just because the first reviewer reported it.
+Likewise, only add to "missed" if you are confident it is a real issue; an
+empty missed array is equally valid.
+
 Output ONLY the JSON, no explanation.

@@ -11,6 +11,7 @@ import { loadConfig } from "@monkeydcode/core/mdc-config"
 import * as Grader from "./grader.ts"
 import * as Voter from "./voter.ts"
 import * as Feedback from "./feedback.ts"
+import * as Telemetry from "./telemetry.ts"
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -75,8 +76,10 @@ function generationConcurrency(provider: string): number | "unbounded" {
 
 export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingResult, unknown> {
     return Effect.gen(function* () {
+        const start = Date.now()
         const config = yield* Effect.tryPromise(() => loadConfig())
         const maxRetries = config.consistency.maxRetries
+        const maxRepairAttempts = config.consistency.maxRepairAttempts
 
         const level = yield* Capability.detect(task.model)
         const temps = task.creative
@@ -100,14 +103,50 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
             verified.push(result)
         }
 
-        const passing = verified.filter(c => c.verification.passed)
+        // Repair loop: a candidate that fails verification gets fed its OWN exact
+        // errors and asked for a minimal fix, re-verified, up to maxRepairAttempts
+        // times — before ever being discarded for a full resample. This is far
+        // cheaper and more reliable than restarting from scratch, especially for
+        // weak models (fixing a named error in code you just wrote is an easier
+        // task than producing correct code unaided on the first try).
+        const repaired: Candidate[] = []
+        const repairAttempts: number[] = []
+        for (const c of verified) {
+            if (c.verification.passed) {
+                repaired.push(c)
+                repairAttempts.push(0)
+                continue
+            }
+            const { candidate, attempts } = yield* repairCandidate(c, task, maxRepairAttempts)
+            repaired.push(candidate)
+            repairAttempts.push(attempts)
+        }
+
+        const passing = repaired.filter(c => c.verification.passed)
 
         if (passing.length === 0) {
             if (retries >= maxRetries) {
-                const best = verified.sort((a, b) => b.verification.score - a.verification.score)[0]!
+                const best = repaired.sort((a, b) => b.verification.score - a.verification.score)[0]!
+                yield* Effect.promise(() => Telemetry.record({
+                    timestamp: new Date().toISOString(),
+                    modelId: task.modelId,
+                    provider: task.model.provider,
+                    capabilityLevel: level,
+                    creative: task.creative ?? false,
+                    temperatures: temps,
+                    repairAttempts,
+                    verificationScores: repaired.map(c => c.verification.score),
+                    verificationPassed: repaired.map(c => c.verification.passed),
+                    resampleRetries: retries,
+                    selectedTemperature: best.temperature,
+                    selectedScore: 0,
+                    confidence: 0,
+                    passed: false,
+                    durationMs: Date.now() - start,
+                }))
                 return { selected: { ...best, rrpScore: 0 }, confidence: 0 }
             }
-            const errors = verified.flatMap(v => v.verification.errors)
+            const errors = repaired.flatMap(v => v.verification.errors)
             const retryPrompt = Feedback.buildRetryPrompt(task.prompt, errors)
             return yield* sample({ ...task, prompt: retryPrompt }, retries + 1)
         }
@@ -119,7 +158,58 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
             ),
         )
         const selected = Voter.selectBest(graded)
+
+        yield* Effect.promise(() => Telemetry.record({
+            timestamp: new Date().toISOString(),
+            modelId: task.modelId,
+            provider: task.model.provider,
+            capabilityLevel: level,
+            creative: task.creative ?? false,
+            temperatures: temps,
+            repairAttempts,
+            verificationScores: repaired.map(c => c.verification.score),
+            verificationPassed: repaired.map(c => c.verification.passed),
+            resampleRetries: retries,
+            selectedTemperature: selected.temperature,
+            selectedScore: selected.rrpScore,
+            confidence: selected.rrpScore,
+            passed: true,
+            durationMs: Date.now() - start,
+        }))
+
         return { selected, confidence: selected.rrpScore }
+    })
+}
+
+// ─── Self-repair ────────────────────────────────────────────────────────────
+
+/** Repeatedly ask the model to fix ITS OWN failing output against its exact
+ *  verification errors, re-verifying after each attempt. Stops early on first
+ *  pass; returns the last attempt (even if still failing) after exhausting
+ *  maxAttempts so the caller always has a real candidate to fall back on. */
+function repairCandidate(
+    candidate: Candidate,
+    task: SamplingTask,
+    maxAttempts: number,
+): Effect.Effect<{ candidate: Candidate; attempts: number }, unknown> {
+    return Effect.gen(function* () {
+        let current = candidate
+        let attempts = 0
+        for (; attempts < maxAttempts && !current.verification.passed; attempts++) {
+            const repairPrompt = Feedback.buildRepairPrompt(current.change, current.verification.errors)
+            const repairedChange = yield* Effect.promise(() =>
+                LLM.generateAsync({
+                    model: task.model,
+                    messages: [{ role: "user", content: repairPrompt }],
+                    temperature: current.temperature,
+                }).then(r => r.text),
+            )
+            current = yield* verifyCandidate(
+                { change: repairedChange, temperature: current.temperature, verification: null as unknown as VerificationResult },
+                task.files,
+            )
+        }
+        return { candidate: current, attempts }
     })
 }
 
@@ -178,7 +268,11 @@ function verifyCandidate(candidate: Candidate, files: string[]): Effect.Effect<C
 
 // ─── Project root detection ───────────────────────────────────────────────────
 
-function detectProjectRoot(files: string[]): string {
+/** Nearest ancestor of `files[0]` containing package.json/tsconfig.json, or
+ *  process.cwd() if there are no files to anchor to. Exported so other
+ *  components (e.g. the tool loop) that need "the project root for this task"
+ *  use the exact same rule instead of a second, potentially divergent one. */
+export function detectProjectRoot(files: string[]): string {
     if (files.length === 0) return process.cwd()
     const parts = files[0]!.split("/")
     for (let i = parts.length - 1; i > 0; i--) {

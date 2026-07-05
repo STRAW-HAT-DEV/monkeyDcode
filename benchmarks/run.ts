@@ -6,7 +6,16 @@
  *   bun run benchmarks/run.ts                    # all tasks, all available models
  *   bun run benchmarks/run.ts --task 01          # single task
  *   bun run benchmarks/run.ts --model qwen7b     # single model
- *   MDCODE_NO_CONSISTENCY=1 bun run benchmarks/run.ts   # A/B: disable consistency engine
+ *   MDCODE_NO_CONSISTENCY=1 bun run benchmarks/run.ts   # baseline: one-shot WITH prompt engineering, no sampling/voting
+ *   MDCODE_RAW=1 bun run benchmarks/run.ts              # raw: one-shot with NO engineering — what a user gets pasting into a bare chat
+ *
+ * Three arms, three different questions:
+ *   consistency (default) — does the full agent (this project) help?
+ *   baseline               — does multi-candidate sampling/voting help, holding prompt engineering constant?
+ *   raw                    — the floor: same model, zero scaffolding. This is what "agent vs raw" is actually measured against.
+ *
+ * Headline metric: pass-rate uplift = consistency_pass_rate - raw_pass_rate, per model, per task.
+ * That number is the entire "does the agent help" claim — track it every run.
  *
  * Results are written to benchmarks/results/<timestamp>.json
  */
@@ -47,7 +56,14 @@ const TASKS_DIR   = join(import.meta.dir, "tasks")
 const RESULTS_DIR = join(import.meta.dir, "results")
 const WORK_DIR    = join(tmpdir(), "mdc-bench-work")
 
-const CONSISTENCY_ENABLED = process.env.MDCODE_NO_CONSISTENCY !== "1"
+type Mode = "consistency" | "baseline" | "raw"
+
+const MODE: Mode = process.env.MDCODE_RAW === "1"
+    ? "raw"
+    : process.env.MDCODE_NO_CONSISTENCY === "1"
+        ? "baseline"
+        : "consistency"
+
 const VERIFY_ONLY = process.argv.includes("--verify-only")
 const TASK_FILTER  = process.argv.find((_, i) => process.argv[i - 1] === "--task")
 const MODEL_FILTER = process.argv.find((_, i) => process.argv[i - 1] === "--model")
@@ -63,7 +79,7 @@ export interface BenchmarkResult {
     durationMs:        number
     outputCode:        string
     error?:            string
-    consistencyMode:   "on" | "off"
+    consistencyMode:   Mode
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -100,7 +116,7 @@ async function main() {
     }
 
     console.log(`\n🏴‍☠️  monkeyDcode Benchmark`)
-    console.log(`   Consistency engine: ${CONSISTENCY_ENABLED ? "ON" : "OFF (A/B mode)"}`)
+    console.log(`   Mode: ${MODE}`)
     console.log(`   Tasks:  ${taskDirs.length}`)
     console.log(`   Models: ${filteredModels.map(m => m.label).join(", ")}`)
     console.log(`   Total runs: ${taskDirs.length * filteredModels.length}\n`)
@@ -123,9 +139,11 @@ async function main() {
                 await cp(join(taskPath, "starter"), WORK_DIR, { recursive: true })
 
                 // Run the agent
-                const outputCode = CONSISTENCY_ENABLED
+                const outputCode = MODE === "consistency"
                     ? await runWithConsistency(taskDesc, WORK_DIR, model.ref, model.id)
-                    : await runBaseline(taskDesc, WORK_DIR, model.ref)
+                    : MODE === "baseline"
+                        ? await runBaseline(taskDesc, WORK_DIR, model.ref)
+                        : await runRaw(taskDesc, WORK_DIR, model.ref)
 
                 // Copy expected tests in
                 await cp(join(taskPath, "expected"), WORK_DIR, { recursive: true })
@@ -142,7 +160,7 @@ async function main() {
                     verificationScore: verification.score,
                     durationMs:        Date.now() - start,
                     outputCode,
-                    consistencyMode:   CONSISTENCY_ENABLED ? "on" : "off",
+                    consistencyMode:   MODE,
                 })
 
                 console.log(verification.passed ? "✅ PASS" : `❌ FAIL (score: ${(verification.score * 100).toFixed(0)}%)`)
@@ -156,7 +174,7 @@ async function main() {
                     durationMs:        Date.now() - start,
                     outputCode:        "",
                     error:             e instanceof Error ? e.message : String(e),
-                    consistencyMode:   CONSISTENCY_ENABLED ? "on" : "off",
+                    consistencyMode:   MODE,
                 })
                 console.log(`💥 ERROR: ${e instanceof Error ? e.message.slice(0, 60) : e}`)
             }
@@ -188,7 +206,7 @@ async function runVerifyOnly(taskDirs: string[]): Promise<BenchmarkResult[]> {
             verificationScore: verification.score,
             durationMs:        Date.now() - start,
             outputCode:        "",
-            consistencyMode:   "on",
+            consistencyMode:   "consistency",
         })
         console.log(`  ${taskDir}: ${verification.passed ? "✅" : "❌"}`)
     }
@@ -227,6 +245,44 @@ async function runBaseline(
     const response = await LLM.generateAsync({
         model,
         messages: [{ role: "user", content: prompt }],
+    })
+
+    await runEffect(applyChange(response.text, srcFiles))
+    return response.text
+}
+
+/**
+ * The floor: same model, same starter files, but NO engineering at all — no
+ * output-format contract, no "implement the solution" framing, no explicit
+ * file-fence instructions. This is what a user gets pasting the files and the
+ * task into a bare chat window. `runBaseline` above already has real prompt
+ * engineering (explicit output contract); this is deliberately more naive so
+ * the three arms measure three different things: does the full agent help
+ * (consistency vs raw), and does sampling/voting alone help holding prompt
+ * engineering constant (baseline vs raw). Extraction is intentionally lenient
+ * since we didn't ask for a specific format.
+ */
+async function runRaw(
+    task: string,
+    workDir: string,
+    model: ModelEntry["ref"],
+): Promise<string> {
+    const { LLM } = await import("../packages/llm/src/llm.ts")
+    const { applyChange } = await import("../packages/agent/src/build-agent.ts")
+    const srcFiles = await collectSourceFiles(workDir)
+
+    const fileContents = await Promise.all(srcFiles.map(async f => {
+        try {
+            return await readFile(f, "utf-8")
+        } catch {
+            return ""
+        }
+    }))
+    const rawPrompt = `${fileContents.filter(Boolean).join("\n\n")}\n\n${task}`
+
+    const response = await LLM.generateAsync({
+        model,
+        messages: [{ role: "user", content: rawPrompt }],
     })
 
     await runEffect(applyChange(response.text, srcFiles))
@@ -298,8 +354,7 @@ async function filterReachableModels(models: ModelEntry[]) {
 
 async function saveResults(results: BenchmarkResult[]) {
     const ts = new Date().toISOString().replace(/[:.]/g, "-")
-    const mode = CONSISTENCY_ENABLED ? "with-consistency" : "baseline"
-    const path = join(RESULTS_DIR, `${ts}-${mode}.json`)
+    const path = join(RESULTS_DIR, `${ts}-${MODE}.json`)
     await Bun.write(path, JSON.stringify(results, null, 2))
     console.log(`\n💾 Results saved: ${path}`)
 }
@@ -311,7 +366,7 @@ function printSummary(results: BenchmarkResult[]) {
     const tasks  = [...new Set(results.map(r => r.task))]
 
     console.log("\n" + "═".repeat(70))
-    console.log(`🏴‍☠️  RESULTS (consistency: ${CONSISTENCY_ENABLED ? "ON" : "OFF"})`)
+    console.log(`🏴‍☠️  RESULTS (mode: ${MODE})`)
     console.log("═".repeat(70))
 
     console.log("\n📊 Pass Rates by Model:\n")
@@ -376,13 +431,41 @@ function computePairwiseConsistency(results: BenchmarkResult[]): Record<string, 
     )
 }
 
+function passRateByModel(results: BenchmarkResult[]): Map<string, number> {
+    const models = [...new Set(results.map(r => r.model))]
+    const out = new Map<string, number>()
+    for (const model of models) {
+        const mr = results.filter(r => r.model === model)
+        out.set(model, mr.filter(r => r.passed).length / mr.length)
+    }
+    return out
+}
+
+/** Load the most recent raw-mode results file, if one exists, to compute the
+ *  headline "does the agent actually help" number. Best-effort: a missing or
+ *  unreadable baseline just means the uplift section is skipped, not a
+ *  reason to fail the whole report. */
+async function loadMostRecentRawResults(): Promise<BenchmarkResult[] | null> {
+    try {
+        const files = (await readdir(RESULTS_DIR))
+            .filter(f => f.endsWith("-raw.json"))
+            .sort()
+        const latest = files.at(-1)
+        if (!latest) return null
+        const raw = await Bun.file(join(RESULTS_DIR, latest)).json()
+        return raw as BenchmarkResult[]
+    } catch {
+        return null
+    }
+}
+
 async function generateReport(results: BenchmarkResult[]) {
     const models = [...new Set(results.map(r => r.model))]
     const lines = [
         "# monkeyDcode Benchmark Results",
         "",
         `Generated: ${new Date().toISOString()}`,
-        `Consistency engine: ${CONSISTENCY_ENABLED ? "ON" : "OFF"}`,
+        `Mode: ${MODE}`,
         "",
         "## Pass Rates",
         "",
@@ -396,6 +479,29 @@ async function generateReport(results: BenchmarkResult[]) {
         const pct = ((passed / mr.length) * 100).toFixed(0)
         const avg = (mr.reduce((s, r) => s + r.verificationScore, 0) / mr.length * 100).toFixed(0)
         lines.push(`| ${mr[0]?.modelLabel ?? model} | ${pct}% | ${avg}% |`)
+    }
+
+    // The headline metric: pass-rate uplift = this run's pass rate − raw pass
+    // rate, per model. This is the entire "agent beats raw prompting" claim —
+    // every other number in this report is supporting detail.
+    if (MODE !== "raw") {
+        const rawResults = await loadMostRecentRawResults()
+        if (rawResults) {
+            const rawRates = passRateByModel(rawResults)
+            const thisRates = passRateByModel(results)
+            lines.push("", `## Pass-Rate Uplift vs Raw (${MODE} − raw)`, "", "| Model | This Run | Raw | Uplift |", "|-------|----------|-----|--------|")
+            for (const model of models) {
+                const thisRate = thisRates.get(model)
+                const rawRate = rawRates.get(model)
+                if (thisRate === undefined || rawRate === undefined) continue
+                const uplift = thisRate - rawRate
+                const label = results.find(r => r.model === model)?.modelLabel ?? model
+                const sign = uplift >= 0 ? "+" : ""
+                lines.push(`| ${label} | ${(thisRate * 100).toFixed(0)}% | ${(rawRate * 100).toFixed(0)}% | ${sign}${(uplift * 100).toFixed(0)}pp |`)
+            }
+        } else {
+            lines.push("", "## Pass-Rate Uplift vs Raw", "", "_No raw-mode results found yet — run `bun run bench:raw` to establish the baseline this number needs._")
+        }
     }
 
     lines.push("", "## Pairwise Consistency", "")
