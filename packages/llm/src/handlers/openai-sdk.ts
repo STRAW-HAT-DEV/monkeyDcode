@@ -1,0 +1,129 @@
+// OpenAI native SDK handler.
+// Uses max_completion_tokens — required by gpt-5-mini, gpt-4o, o1, o3 and newer models.
+// For OpenAI-compatible providers (Groq, DeepSeek, OpenRouter, Ollama) use openai-compat-sdk.ts.
+
+import OpenAI from "openai"
+import type { LLMHandler } from "../handler.ts"
+import type { LLMRequest, LLMResponse, LLMEvent } from "../schema.ts"
+import { LLMRuntime } from "../runtime.ts"
+import { toOpenAIMessages, buildTools, buildResponseFromEvents, FINISH_REASON_MAP } from "./openai-shared.ts"
+
+const OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+function getClient(req: LLMRequest): OpenAI {
+    const apiKey =
+        LLMRuntime.getApiKey("openai", () => process.env["OPENAI_API_KEY"]) ?? ""
+    const baseURL = LLMRuntime.getBaseUrl("openai", OPENAI_BASE_URL)
+    return new OpenAI({ apiKey, baseURL })
+}
+
+function buildMessages(
+    req: LLMRequest,
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+    const converted = toOpenAIMessages(req.messages)
+    if (req.system) {
+        return [{ role: "system", content: req.system }, ...converted]
+    }
+    return converted
+}
+
+export function makeOpenAIHandler(): LLMHandler {
+    return {
+        async generate(req: LLMRequest): Promise<LLMResponse> {
+            const client = getClient(req)
+            const tools = buildTools(req.tools)
+
+            const response = await client.chat.completions.create({
+                model: req.model.id,
+                messages: buildMessages(req),
+                ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+                max_completion_tokens: req.maxTokens ?? 4096,
+                stream: false,
+                ...(tools ? { tools } : {}),
+            })
+
+            const choice = response.choices[0]
+            const msg = choice?.message
+
+            const toolCalls = (msg?.tool_calls ?? []).map((tc) => ({
+                id: tc.id,
+                name: tc.function.name,
+                input: JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>,
+            }))
+
+            return {
+                text: msg?.content ?? "",
+                toolCalls,
+                usage: {
+                    inputTokens: response.usage?.prompt_tokens ?? 0,
+                    outputTokens: response.usage?.completion_tokens ?? 0,
+                },
+                stopReason: FINISH_REASON_MAP[choice?.finish_reason ?? "stop"] ?? "end",
+            }
+        },
+
+        async *stream(req: LLMRequest): AsyncIterable<LLMEvent> {
+            const client = getClient(req)
+            const tools = buildTools(req.tools)
+
+            const stream = await client.chat.completions.create({
+                model: req.model.id,
+                messages: buildMessages(req),
+                ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+                max_completion_tokens: req.maxTokens ?? 4096,
+                stream: true,
+                stream_options: { include_usage: true },
+                ...(tools ? { tools } : {}),
+            })
+
+            const events: LLMEvent[] = []
+
+            for await (const chunk of stream) {
+                const delta = chunk.choices[0]?.delta
+
+                if (delta?.content) {
+                    const ev: LLMEvent = { type: "text_delta", delta: delta.content }
+                    events.push(ev)
+                    yield ev
+                }
+
+                if (delta?.tool_calls) {
+                    for (const tc of delta.tool_calls) {
+                        if (tc.function?.name) {
+                            const ev: LLMEvent = {
+                                type: "tool_call_start",
+                                id: tc.id ?? "",
+                                name: tc.function.name,
+                            }
+                            events.push(ev)
+                            yield ev
+                        }
+                        if (tc.function?.arguments) {
+                            const ev: LLMEvent = {
+                                type: "tool_call_delta",
+                                id: tc.id ?? "",
+                                inputDelta: tc.function.arguments,
+                            }
+                            events.push(ev)
+                            yield ev
+                        }
+                    }
+                }
+
+                if (chunk.usage) {
+                    const ev: LLMEvent = {
+                        type: "usage",
+                        stats: {
+                            inputTokens: chunk.usage.prompt_tokens,
+                            outputTokens: chunk.usage.completion_tokens,
+                        },
+                    }
+                    events.push(ev)
+                    yield ev
+                }
+            }
+
+            yield { type: "done", response: buildResponseFromEvents(events) }
+        },
+    }
+}

@@ -40,6 +40,13 @@ function resolveRoute(req: LLMRequest): Route {
             req.model.provider,
         )
     }
+    if (!route.config.handler && !route.config.protocol) {
+        throw new LLMError(
+            `Route for "${req.model.provider}" has neither a handler nor a protocol configured.`,
+            "model_not_found",
+            req.model.provider,
+        )
+    }
     return route
 }
 
@@ -64,6 +71,7 @@ function isTimeoutError(e: unknown): boolean {
 
 async function doFetch(route: Route, req: LLMRequest): Promise<Response> {
     const { protocol, baseUrl, apiKey, defaultHeaders = {} } = route.config
+    if (!protocol) throw new LLMError(`No protocol on route "${route.provider}"`, "unknown", route.provider)
     const resolvedBase = LLMRuntime.getBaseUrl(route.provider, baseUrl)
     const key = LLMRuntime.getApiKey(route.provider, apiKey) ?? ""
     const url = `${resolvedBase}${protocol.buildPath(req.model.id)}`
@@ -177,6 +185,7 @@ async function fetchAndCollect(req: LLMRequest): Promise<LLMResponse> {
     const res = await doFetch(route, req)
     const events: LLMEvent[] = []
     for await (const line of readLines(res.body!)) {
+        events.push(...route.config.protocol!.parseChunk(line))
         events.push(...route.config.protocol.parseChunk(line))
     }
     return buildResponseFromEvents(events)
@@ -225,6 +234,13 @@ function buildResponseFromEvents(events: LLMEvent[]): LLMResponse {
 
 export const LLM = {
     generate(req: LLMRequest): Effect.Effect<LLMResponse, LLMError> {
+        const route = resolveRoute(req)
+        if (route.config.handler) {
+            return Effect.tryPromise({
+                try: () => route.config.handler!.generate(req),
+                catch: (e) => LLMError.from(e, req.model.provider),
+            })
+        }
         return Effect.tryPromise({
             try: () => withRetry(req.model.provider, () => fetchAndCollect(req)),
             catch: (e: unknown) => LLMError.from(e, req.model.provider),
@@ -233,11 +249,25 @@ export const LLM = {
 
     // Promise-based API — no Effect import needed in consuming code.
     async generateAsync(req: LLMRequest): Promise<LLMResponse> {
+        const route = resolveRoute(req)
+        if (route.config.handler) {
+            try {
+                return await route.config.handler.generate(req)
+            } catch (e) {
+                throw LLMError.from(e, req.model.provider)
+            }
+        }
         return withRetry(req.model.provider, () => fetchAndCollect(req))
     },
 
     async *stream(req: LLMRequest): AsyncIterable<LLMEvent> {
         const route = resolveRoute(req)
+
+        if (route.config.handler) {
+            yield* route.config.handler.stream(req)
+            return
+        }
+
         let res: Response
         try {
             res = await doFetch(route, req)
@@ -249,7 +279,7 @@ export const LLM = {
         const events: LLMEvent[] = []
 
         for await (const line of readLines(res.body!)) {
-            const chunk = route.config.protocol.parseChunk(line)
+            const chunk = route.config.protocol!.parseChunk(line)
             for (const event of chunk) {
                 events.push(event)
                 yield event
