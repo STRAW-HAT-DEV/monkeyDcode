@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { computeFibonacci } from "../src/fib"
+import { computeFibonacci } from "./src/fib"
 
 test("returns correct values", () => {
     expect(computeFibonacci(0)).toBe(0)

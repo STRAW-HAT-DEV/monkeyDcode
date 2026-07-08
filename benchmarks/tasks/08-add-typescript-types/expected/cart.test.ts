@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { createCart, addItem, removeItem, getTotal } from "../src/cart"
+import { createCart, addItem, removeItem, getTotal } from "./src/cart"
 
 test("createCart returns typed structure", () => {
     const cart = createCart()

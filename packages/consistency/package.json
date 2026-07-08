@@ -13,6 +13,7 @@
         "./telemetry": "./src/telemetry.ts",
         "./model-capability/detector": "./src/model-capability/detector.ts",
         "./model-capability/registry": "./src/model-capability/registry.ts",
+        "./model-capability/policy": "./src/model-capability/policy.ts",
         "./verification/pipeline": "./src/verification/pipeline.ts",
         "./verification/stage-selector": "./src/verification/stage-selector.ts",
         "./verification/test-existing": "./src/verification/test-existing.ts",

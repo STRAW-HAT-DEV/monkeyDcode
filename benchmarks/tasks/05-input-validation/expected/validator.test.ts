@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { validateUser } from "../src/validator"
+import { validateUser } from "./src/validator"
 
 test("accepts valid user", () => {
     const r = validateUser({ name: "Alice", email: "alice@example.com", age: 30 })

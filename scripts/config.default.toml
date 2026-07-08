@@ -13,6 +13,18 @@ test_timeout = 120
 [consistency]
 max_retries = 3
 max_repair_attempts = 2
+# Once true, and after ~20 recorded samples for a model, override the static
+# temperature/repair/format tables with what has actually worked for that
+# model on this machine. Off by default.
+self_tuning = false
 
 [context]
 auto_compact_every = 5
+
+# Hybrid local->cloud escalation: when a step exhausts repair + resample on
+# the model above, retry it once on a stronger model before giving up.
+# Requires enabled = true AND a real provider/model below.
+[escalation]
+enabled = false
+provider = ""
+model = ""

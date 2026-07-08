@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { getUsers } from "../src/users"
+import { getUsers } from "./src/users"
 
 test("returns first page by default", () => {
     const result = getUsers()

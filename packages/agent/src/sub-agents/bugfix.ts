@@ -52,13 +52,16 @@ export function fix(report: BugReport, model: ModelRef, modelId: string): Effect
             await writeFile(testFile, testCode)
         })
 
-        // Step 2 — Fix the bug using the plan → build pipeline
+        // Step 2 — Fix the bug using the plan → build pipeline. skipPreStepCheck:
+        // this sub-agent already wrote its own repro test above — a second,
+        // generic test-first check would duplicate (or worse, conflict with)
+        // the one specific test that actually reproduces the reported bug.
         const fixPlan = yield* PlanAgent.plan(
             `Fix this bug:\n${report.error}\n${report.stack ?? ""}\n\nFailing test is at: ${testFile}\nSuspect files: ${suspectFiles.join(", ")}`,
             model,
             modelId,
         )
-        yield* BuildAgent.executePlan(fixPlan, model, modelId)
+        yield* BuildAgent.executePlan(fixPlan, model, modelId, { skipPreStepCheck: true })
 
         // Step 3 — Verify the reproduction test now passes
         const result = yield* Effect.promise(() =>
