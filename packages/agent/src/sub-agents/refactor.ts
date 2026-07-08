@@ -36,8 +36,12 @@ Current verification score: ${(before.score * 100).toFixed(0)}%`,
             modelId,
         )
 
-        // Step 3 — Execute the refactor
-        yield* BuildAgent.executePlan(plan, model, modelId)
+        // Step 3 — Execute the refactor. skipPreStepCheck: a refactor's
+        // contract is "existing tests still pass, behavior unchanged" (verified
+        // above/below via Pipeline.run) — there is no NEW behavior to write a
+        // test-first check against, and generating one would be a spurious
+        // extra hurdle for a step that shouldn't be adding new assertions.
+        yield* BuildAgent.executePlan(plan, model, modelId, { skipPreStepCheck: true })
 
         // Step 4 — Verify behavior is preserved
         const after = yield* Effect.promise(() =>

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { readConfig, writeConfig } from "../src/fs-utils"
+import { readConfig, writeConfig } from "./src/fs-utils"
 import { unlinkSync } from "fs"
 
 const TEST_FILE = "/tmp/mdc-bench-config-test.txt"

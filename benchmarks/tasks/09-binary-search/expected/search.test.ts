@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { binarySearch } from "../src/search"
+import { binarySearch } from "./src/search"
 
 test("finds element in middle", () => { expect(binarySearch([1,3,5,7,9], 5)).toBe(2) })
 test("finds first element",     () => { expect(binarySearch([1,3,5,7,9], 1)).toBe(0) })

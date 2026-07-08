@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { FileLogger } from "../src/logger"
+import { FileLogger } from "./src/logger"
 import { existsSync, readFileSync, unlinkSync } from "fs"
 
 const LOG_FILE = "/tmp/mdc-bench-logger-test.log"

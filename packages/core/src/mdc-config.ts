@@ -19,9 +19,28 @@ export interface MdcConfig {
          *  asking for a minimal fix is far cheaper and more reliable — especially
          *  for weak models — than discarding it and generating from scratch. */
         maxRepairAttempts: number
+        /** Opt-in: once ≥20 samples are recorded for a model, override the
+         *  static temperature/repair/format tables with what has actually
+         *  worked for that model on this machine (see model-capability/policy.ts).
+         *  Off by default — like the Playwright screenshot judge, a
+         *  behavior-changing feature should be a visible choice, not a silent
+         *  default, especially since it can make benchmark runs
+         *  non-reproducible mid-run as the policy kicks in. */
+        selfTuning: boolean
     }
     context: {
         autoCompactEvery: number
+    }
+    /** Hybrid local→cloud escalation (ROADMAP.md Phase 2, P2-2): when a step
+     *  exhausts repair + resample on the configured model, retry it once on
+     *  a stronger escalation model before giving up. Opt-in and off by
+     *  default — it requires a second provider/model to be explicitly
+     *  configured, and silently calling out to a different (likely paid)
+     *  provider is not a default any agent should assume permission for. */
+    escalation: {
+        enabled: boolean
+        provider: string
+        model: string
     }
 }
 
@@ -34,8 +53,9 @@ export const DEFAULT_CONFIG: MdcConfig = {
         stages: ["syntax", "typecheck", "lint", "tests"],
         testTimeout: 120,
     },
-    consistency: { maxRetries: 3, maxRepairAttempts: 2 },
+    consistency: { maxRetries: 3, maxRepairAttempts: 2, selfTuning: false },
     context: { autoCompactEvery: 5 },
+    escalation: { enabled: false, provider: "", model: "" },
 }
 
 function configPath(): string {
@@ -44,6 +64,17 @@ function configPath(): string {
         return join(appData, "monkeydcode", "config.toml")
     }
     return join(homedir(), ".config", "monkeydcode", "config.toml")
+}
+
+/** TOML booleans are bare (`true`/`false`, no quotes) — parseTomlValue's
+ *  fallback branch returns them as the literal strings "true"/"false", not a
+ *  boolean, since it only special-cases arrays and integers. This normalizes
+ *  either a real boolean (already-parsed default) or that string form. */
+function parseBool(value: unknown, fallback: boolean): boolean {
+    if (typeof value === "boolean") return value
+    if (value === "true") return true
+    if (value === "false") return false
+    return fallback
 }
 
 function parseTomlValue(raw: string): string | number | string[] {
@@ -90,6 +121,7 @@ export async function loadConfig(): Promise<MdcConfig> {
         const v = parsed.verification ?? {}
         const c = parsed.consistency ?? {}
         const ctx = parsed.context ?? {}
+        const esc = parsed.escalation ?? {}
 
         const providers: MdcConfig["providers"] = {}
         for (const [key, val] of Object.entries(parsed)) {
@@ -115,11 +147,17 @@ export async function loadConfig(): Promise<MdcConfig> {
                 maxRepairAttempts: Number(
                     c.max_repair_attempts ?? DEFAULT_CONFIG.consistency.maxRepairAttempts,
                 ),
+                selfTuning: parseBool(c.self_tuning, DEFAULT_CONFIG.consistency.selfTuning),
             },
             context: {
                 autoCompactEvery: Number(
                     ctx.auto_compact_every ?? DEFAULT_CONFIG.context.autoCompactEvery,
                 ),
+            },
+            escalation: {
+                enabled: parseBool(esc.enabled, DEFAULT_CONFIG.escalation.enabled),
+                provider: String(esc.provider ?? DEFAULT_CONFIG.escalation.provider),
+                model: String(esc.model ?? DEFAULT_CONFIG.escalation.model),
             },
         }
     } catch {
@@ -152,9 +190,15 @@ export async function saveConfig(config: MdcConfig): Promise<void> {
         "[consistency]",
         `max_retries = ${config.consistency.maxRetries}`,
         `max_repair_attempts = ${config.consistency.maxRepairAttempts}`,
+        `self_tuning = ${config.consistency.selfTuning}`,
         "",
         "[context]",
         `auto_compact_every = ${config.context.autoCompactEvery}`,
+        "",
+        "[escalation]",
+        `enabled = ${config.escalation.enabled}`,
+        `provider = ${quoteToml(config.escalation.provider)}`,
+        `model = ${quoteToml(config.escalation.model)}`,
         "",
     ]
 

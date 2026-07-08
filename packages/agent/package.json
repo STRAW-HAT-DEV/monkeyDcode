@@ -12,6 +12,7 @@
         "./registry": "./src/registry.ts",
         "./tool-loop": "./src/tool-loop.ts",
         "./repo-map": "./src/repo-map.ts",
+        "./pre-step-check": "./src/pre-step-check.ts",
         "./status": "./src/status.ts",
         "./working-memory": "./src/working-memory.ts",
         "./task-type": "./src/task-type.ts",
@@ -25,6 +26,7 @@
     "dependencies": {
         "@monkeydcode/consistency": "workspace:*",
         "@monkeydcode/context": "workspace:*",
+        "@monkeydcode/core": "workspace:*",
         "@monkeydcode/python-bridge": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
         "@monkeydcode/hashline": "workspace:*",

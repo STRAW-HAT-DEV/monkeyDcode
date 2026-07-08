@@ -1,5 +1,5 @@
 import { test, expect, mock, beforeEach } from "bun:test"
-import { fetchUser, saveUser, ApiError } from "../src/api"
+import { fetchUser, saveUser, ApiError } from "./src/api"
 
 beforeEach(() => {
     global.fetch = mock(async (url: string, opts?: RequestInit) => {

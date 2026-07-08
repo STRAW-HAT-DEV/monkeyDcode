@@ -20,11 +20,31 @@
  * Results are written to benchmarks/results/<timestamp>.json
  */
 
-import { readdir, mkdir, rm, cp, readFile } from "fs/promises"
+import { readdir, mkdir, rm, cp, readFile, writeFile } from "fs/promises"
+import { existsSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import * as Pipeline from "../packages/consistency/src/verification/pipeline.ts"
 import { distance } from "fastest-levenshtein"
+
+/**
+ * Without a package.json, `test-existing.ts`'s `detectTestRunner` can't tell
+ * this is a JS/TS project and returns null — and the "tests" verification
+ * stage then trivially reports `passed: true` when there's no runner to run,
+ * rather than failing loudly. That silently no-ops the "tests" stage (weight
+ * 0.30, the single heaviest stage) for every bare fixture work dir: the
+ * expected/*.test.ts files were never actually being executed, for any of
+ * the 10 original micro-tasks — only syntax/typecheck/lint of the source
+ * ever ran. Verified by reproduction before fixing (a deliberately-wrong
+ * getUsers() passes verify-only clean without this). Write a minimal
+ * package.json so `bun test` actually runs against every task's real
+ * expected/ tests, for both old and new fixtures alike.
+ */
+async function ensureTestableProject(workDir: string): Promise<void> {
+    const pkgPath = join(workDir, "package.json")
+    if (existsSync(pkgPath)) return
+    await writeFile(pkgPath, JSON.stringify({ name: "mdc-bench-fixture", private: true, scripts: { test: "bun test" } }, null, 2))
+}
 
 async function runEffect<A>(program: import("effect").Effect.Effect<A, unknown, never>): Promise<A> {
     const { Effect } = await import("effect")
@@ -147,6 +167,7 @@ async function main() {
 
                 // Copy expected tests in
                 await cp(join(taskPath, "expected"), WORK_DIR, { recursive: true })
+                await ensureTestableProject(WORK_DIR)
 
                 // Verify
                 const srcFiles = await collectSourceFiles(WORK_DIR)
@@ -196,6 +217,7 @@ async function runVerifyOnly(taskDirs: string[]): Promise<BenchmarkResult[]> {
         await rm(WORK_DIR, { recursive: true, force: true })
         await cp(join(taskPath, "starter"), WORK_DIR, { recursive: true })
         await cp(join(taskPath, "expected"), WORK_DIR, { recursive: true })
+        await ensureTestableProject(WORK_DIR)
         const srcFiles = await collectSourceFiles(WORK_DIR)
         const verification = await Pipeline.run(srcFiles, WORK_DIR)
         results.push({
