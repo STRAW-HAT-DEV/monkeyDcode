@@ -17,6 +17,7 @@
       "dependencies": {
         "@monkeydcode/consistency": "workspace:*",
         "@monkeydcode/context": "workspace:*",
+        "@monkeydcode/core": "workspace:*",
         "@monkeydcode/engine": "workspace:*",
         "@monkeydcode/hashline": "workspace:*",
         "@monkeydcode/llm": "workspace:*",

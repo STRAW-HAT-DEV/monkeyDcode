@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { debounce } from "../src/debounce"
+import { debounce } from "./src/debounce"
 
 test("calls function after delay", async () => {
     let count = 0

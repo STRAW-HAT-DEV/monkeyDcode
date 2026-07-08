@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Exit } from "effect"
 import { readFile, writeFile, mkdir } from "fs/promises"
 import { existsSync, readFileSync } from "fs"
 import { basename, extname, dirname } from "path"
@@ -6,6 +6,9 @@ import * as Sampler from "@monkeydcode/consistency/sampler"
 import * as Retriever from "@monkeydcode/context/retriever"
 import * as Capability from "@monkeydcode/consistency/model-capability/detector"
 import { recordPassRate } from "@monkeydcode/consistency/model-capability/detector"
+import * as Policy from "@monkeydcode/consistency/model-capability/policy"
+import * as Telemetry from "@monkeydcode/consistency/telemetry"
+import { loadConfig } from "@monkeydcode/core/mdc-config"
 import {
     applyPatch,
     formatReadOutput,
@@ -21,6 +24,7 @@ import * as Status from "./status.ts"
 import * as Changes from "./changes.ts"
 import { assertCanWrite } from "./registry.ts"
 import * as ToolLoop from "./tool-loop.ts"
+import * as PreStepCheck from "./pre-step-check.ts"
 
 export type { Plan, PlanStep }
 
@@ -33,9 +37,23 @@ interface ExtractedBlock {
     isDiff: boolean
 }
 
+export interface ExecutePlanOptions {
+    /** Skip test-first check generation (ROADMAP Phase 2 P2-3) for this plan's
+     *  steps. Sub-agents that already have their own test contract — bugfix's
+     *  repro test, refactor's behavior-preservation requirement — opt out so a
+     *  second, generic check doesn't get generated alongside/in conflict with
+     *  it. Defaults to enabled (false/undefined) for the generic plan path. */
+    skipPreStepCheck?: boolean
+}
+
 // ─── Plan execution ───────────────────────────────────────────────────────────
 
-export function executePlan(plan: Plan, model: ModelRef, modelId: string): Effect.Effect<void, unknown> {
+export function executePlan(
+    plan: Plan,
+    model: ModelRef,
+    modelId: string,
+    options?: ExecutePlanOptions,
+): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
         for (let i = 0; i < plan.steps.length; i++) {
             const step = plan.steps[i]!
@@ -45,15 +63,63 @@ export function executePlan(plan: Plan, model: ModelRef, modelId: string): Effec
                 plan,
                 progress: { current: i + 1, total: plan.steps.length },
             })
-            yield* executeStep(step, model, modelId, i)
+            yield* executeStep(step, model, modelId, i, options)
         }
     })
 }
 
-function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: number): Effect.Effect<void, unknown> {
+function executeStep(
+    step: PlanStep,
+    model: ModelRef,
+    modelId: string,
+    index: number,
+    options?: ExecutePlanOptions,
+): Effect.Effect<void, unknown> {
     return Effect.gen(function* () {
         assertCanWrite("build")
         const capabilityLevel = yield* Capability.detect(model)
+        const config = yield* Effect.tryPromise(() => loadConfig())
+
+        // Self-tuning (opt-in, ROADMAP Phase 2 P2-1): if this model has
+        // verifiably done better with full-rewrite than hashline at line
+        // counts the static threshold would still send to hashline, raise
+        // the threshold for it specifically. Falls back to the static
+        // FULL_REWRITE_LINE_THRESHOLD when tuning is off or there isn't
+        // enough recorded evidence yet.
+        let fullRewriteLineThreshold = FULL_REWRITE_LINE_THRESHOLD
+        if (config.consistency.selfTuning) {
+            const records = yield* Effect.promise(() => Telemetry.readAllForModel(modelId))
+            const recommended = Policy.recommendFullRewriteThreshold(records, FULL_REWRITE_LINE_THRESHOLD)
+            if (recommended !== null) fullRewriteLineThreshold = recommended
+        }
+
+        // Test-first (ROADMAP Phase 2 P2-3): generate an executable check for
+        // this step's verificationCriteria BEFORE sampling the implementation,
+        // confirm it's currently red, and let it ride along as a real project
+        // file. No pipeline/sampler changes needed for this to matter — the
+        // sampler's existing "tests" verification stage picks the new file up
+        // automatically, so a failing check drives the exact same repair
+        // loop as any other verification failure. Skipped for creative steps
+        // (no meaningful behavioral assertion to write for a landing page)
+        // and when the caller opts out (bugfix/refactor already have their
+        // own test contract — see sub-agents/bugfix.ts, sub-agents/refactor.ts).
+        // Best-effort via Effect.exit: run to an Exit and treat any non-success
+        // (E-channel failure OR defect — the inner effect calls the model via
+        // Effect.promise, whose rejection is a DEFECT) as "no check." Effect.catch
+        // is wrong here twice over: it doesn't recover defects, and its 2-arg
+        // form mis-resolves to a curried function that crashes on yield* in this
+        // Effect build. A pre-step check must never crash the step it gates.
+        let check: PreStepCheck.GeneratedCheck | null = null
+        if (!step.creative && !options?.skipPreStepCheck) {
+            const exit = yield* PreStepCheck.createPreStepCheck(
+                step.description, step.verificationCriteria, step.targetFiles, model,
+            ).pipe(Effect.exit)
+            check = Exit.isSuccess(exit) ? exit.value : null
+        }
+        // Note: the check is NOT recorded as a produced change here — only after
+        // the step passes (below). Recording it up front would leave the
+        // orchestrator's change list pointing at a file that gets deleted on
+        // failure, which full-verification would then fail to read.
 
         const context = yield* Retriever.retrieve(
             { files: step.targetFiles, description: step.description },
@@ -69,7 +135,13 @@ function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: nu
             ? ""
             : yield* gatherRecon(step, context, model)
 
-        const prompt = buildExecutionPrompt(step, context, capabilityLevel, reconTranscript)
+        const checkContent = check
+            ? yield* Effect.promise(() => readFile(check.path, "utf-8").catch(() => ""))
+            : ""
+
+        const prompt = buildExecutionPrompt(
+            step, context, capabilityLevel, reconTranscript, fullRewriteLineThreshold, checkContent,
+        )
 
         const result = yield* Sampler.sample({
             prompt,
@@ -79,8 +151,34 @@ function executeStep(step: PlanStep, model: ModelRef, modelId: string, index: nu
             creative: step.creative,
         })
 
+        // Hybrid escalation (ROADMAP Phase 2 P2-2): the sampler already
+        // verified this came from the escalation model after the primary
+        // model exhausted repair + resample — surface it rather than let it
+        // look like the configured model just worked.
+        if (result.escalatedTo) {
+            Status.emit({
+                agent: "franky",
+                action: `Escalated step ${index + 1} to ${result.escalatedTo} — ${modelId} exhausted repair and resample`,
+            })
+        }
+
         yield* applyChange(result.selected.change, step.targetFiles)
         yield* Effect.tryPromise(() => recordPassRate(modelId, result.selected.verification.passed))
+
+        if (check) {
+            if (result.selected.verification.passed) {
+                // The check passed and stays — report it as a produced change
+                // (it's a real test the agent added, like bugfix.ts's repro).
+                Changes.recordWrite(check.path)
+            } else {
+                // The step failed outright (score-0 give-up path) — remove the
+                // check. A permanently-failing test must not be left behind when
+                // the step it gated never landed; mirrors bugfix.ts's honesty
+                // about unresolved fixes. (Not recorded above, so the
+                // orchestrator's change list never points at this deleted path.)
+                yield* PreStepCheck.removeCheck(check)
+            }
+        }
 
         yield* WorkingMemory.appendStep({
             index,
@@ -125,10 +223,12 @@ already have everything you need, respond with a one-line summary of your
 plan — do NOT write the final code in this step.`
 
         const projectRoot = Sampler.detectProjectRoot(step.targetFiles)
-        const outcome = yield* Effect.catch(
-            ToolLoop.run(reconPrompt, { model, projectRoot, maxIterations: 4 }),
-            () => Effect.succeed({ finalText: "", transcript: "", iterations: 0 }),
-        )
+        // Best-effort via Effect.exit: the tool loop calls the model via
+        // Effect.promise (rejection → DEFECT). Recon is optional — any
+        // non-success degrades to "no transcript," never crashes the step.
+        // (See the pre-step-check note above on why Effect.catch is wrong here.)
+        const exit = yield* ToolLoop.run(reconPrompt, { model, projectRoot, maxIterations: 4 }).pipe(Effect.exit)
+        const outcome = Exit.isSuccess(exit) ? exit.value : { finalText: "", transcript: "", iterations: 0 }
         return outcome.transcript
     })
 }
@@ -172,20 +272,20 @@ function readExistingTargets(files: string[]): string {
 const FULL_REWRITE_CAPABILITY_LEVEL = 5
 const FULL_REWRITE_LINE_THRESHOLD = 150
 
-function shouldUseFullRewrite(targetFiles: string[], capabilityLevel: number): boolean {
+function shouldUseFullRewrite(targetFiles: string[], capabilityLevel: number, lineThreshold: number): boolean {
     if (capabilityLevel < FULL_REWRITE_CAPABILITY_LEVEL) return false
     return targetFiles.every(f => {
         if (!existsSync(f)) return true
         try {
-            return readFileSync(f, "utf-8").split("\n").length <= FULL_REWRITE_LINE_THRESHOLD
+            return readFileSync(f, "utf-8").split("\n").length <= lineThreshold
         } catch {
             return false
         }
     })
 }
 
-function outputFormatSection(targetFiles: string[], capabilityLevel: number): string {
-    if (shouldUseFullRewrite(targetFiles, capabilityLevel)) {
+function outputFormatSection(targetFiles: string[], capabilityLevel: number, lineThreshold: number): string {
+    if (shouldUseFullRewrite(targetFiles, capabilityLevel, lineThreshold)) {
         return [
             "Output the COMPLETE contents of each target file — a full rewrite, not a patch.",
             "Use one ```lang:path/to/file fenced code block per file, containing the ENTIRE file.",
@@ -205,14 +305,24 @@ function buildExecutionPrompt(
     context: Retriever.AssembledContext,
     capabilityLevel: number,
     reconTranscript: string,
+    fullRewriteLineThreshold: number,
+    checkContent: string,
 ): string {
     const fileList = step.targetFiles.join("\n")
     const existingContent = readExistingTargets(step.targetFiles)
     const recon = reconTranscript
         ? `\n\n## Investigation Findings (already gathered — do not re-investigate)\n${reconTranscript}`
         : ""
+    // Test-first (ROADMAP Phase 2 P2-3): a real, currently-failing test the
+    // implementation must satisfy. It's already a file in the project, so it
+    // will be run as part of normal verification either way — showing it
+    // here just lets the model target it directly instead of discovering it
+    // only through a repair-loop failure.
+    const check = checkContent
+        ? `\n\n## Test To Satisfy (already written, currently failing — make it pass)\n\`\`\`\n${checkContent}\n\`\`\``
+        : ""
 
-    return `${Retriever.formatForPrompt(context)}${recon}
+    return `${Retriever.formatForPrompt(context)}${recon}${check}
 
 ${existingContent}
 
@@ -226,7 +336,7 @@ ${fileList}
 ${step.verificationCriteria}
 
 ## Output Format — CRITICAL
-${outputFormatSection(step.targetFiles, capabilityLevel)}
+${outputFormatSection(step.targetFiles, capabilityLevel, fullRewriteLineThreshold)}
 
 Target file paths:
 ${fileList}`

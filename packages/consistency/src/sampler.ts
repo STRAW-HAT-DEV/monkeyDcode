@@ -1,9 +1,10 @@
-import { Effect } from "effect"
+import { Effect, Exit } from "effect"
 import { readFile, writeFile, mkdir, rm } from "fs/promises"
 import { existsSync } from "fs"
-import { basename, extname, dirname } from "path"
+import { basename, extname, dirname, isAbsolute, join, resolve } from "path"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
+import { resolveModel } from "@monkeydcode/llm/resolve-model"
 import * as Pipeline from "./verification/pipeline.ts"
 import type { VerificationResult } from "./verification/types.ts"
 import * as Capability from "./model-capability/detector.ts"
@@ -12,6 +13,7 @@ import * as Grader from "./grader.ts"
 import * as Voter from "./voter.ts"
 import * as Feedback from "./feedback.ts"
 import * as Telemetry from "./telemetry.ts"
+import * as Policy from "./model-capability/policy.ts"
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -35,6 +37,11 @@ export interface Candidate {
 export interface SamplingResult {
     selected: Candidate & { rrpScore: number }
     confidence: number
+    /** Set when this result came from the escalation model (ROADMAP Phase 2,
+     *  P2-2), not the primary task.model — lets callers report "escalated
+     *  step N to <model>" instead of silently attributing the win to the
+     *  local model that actually exhausted repair + resample on it. */
+    escalatedTo?: string
 }
 
 // ─── Temperature sets by model capability level ───────────────────────────────
@@ -79,12 +86,28 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         const start = Date.now()
         const config = yield* Effect.tryPromise(() => loadConfig())
         const maxRetries = config.consistency.maxRetries
-        const maxRepairAttempts = config.consistency.maxRepairAttempts
+        let maxRepairAttempts = config.consistency.maxRepairAttempts
 
         const level = yield* Capability.detect(task.model)
-        const temps = task.creative
+        let temps = task.creative
             ? (CREATIVE_TEMP_SETS[level] ?? [0.8])
             : (TEMP_SETS[level] ?? [0.5])
+
+        // Self-tuning (opt-in — config.consistency.selfTuning, ROADMAP Phase 2
+        // P2-1): once enough samples are recorded for THIS exact model, prefer
+        // what has actually worked over the static tables tuned in the
+        // abstract for "a level-N model." Skipped for creative tasks (their
+        // temperature spread serves a different purpose — see
+        // CREATIVE_TEMP_SETS) and for retries (the prompt has already been
+        // rewritten with error context by then; re-tuning mid-retry-chain
+        // adds telemetry reads for no benefit).
+        if (config.consistency.selfTuning && !task.creative && retries === 0) {
+            const records = yield* Effect.promise(() => Telemetry.readAllForModel(task.modelId))
+            const recommendedTemps = Policy.recommendTemperatures(records, temps)
+            if (recommendedTemps) temps = recommendedTemps
+            const recommendedRepair = Policy.recommendRepairBudget(records, maxRepairAttempts)
+            if (recommendedRepair !== null) maxRepairAttempts = recommendedRepair
+        }
 
         // Generate candidates (no file I/O yet). Concurrency is provider-aware:
         // local single-instance servers (e.g. Ollama) run sequentially to avoid
@@ -123,6 +146,7 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         }
 
         const passing = repaired.filter(c => c.verification.passed)
+        const formats = repaired.map(c => Telemetry.detectChangeFormat(c.change))
 
         if (passing.length === 0) {
             if (retries >= maxRetries) {
@@ -137,6 +161,7 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
                     repairAttempts,
                     verificationScores: repaired.map(c => c.verification.score),
                     verificationPassed: repaired.map(c => c.verification.passed),
+                    formats,
                     resampleRetries: retries,
                     selectedTemperature: best.temperature,
                     selectedScore: 0,
@@ -144,6 +169,50 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
                     passed: false,
                     durationMs: Date.now() - start,
                 }))
+
+                // Hybrid escalation (opt-in, ROADMAP Phase 2 P2-2): the local
+                // model has now exhausted repair AND resample — a verified
+                // failure, not a guess — so this is the one signal that
+                // justifies spending on a stronger configured model. One
+                // attempt only; if it also fails, give up exactly as before.
+                if (config.escalation.enabled && config.escalation.provider && config.escalation.model) {
+                    // Best-effort via Effect.exit: attemptEscalation can fail by
+                    // a synchronous throw (resolveModel on an unknown provider)
+                    // or an Effect.promise rejection (unreachable model / API
+                    // error) — both DEFECTS. Effect.catch would neither recover
+                    // them nor even compose (its 2-arg form mis-resolves to a
+                    // curried function that crashes on yield* in this Effect
+                    // build). A misconfigured/unreachable escalation model must
+                    // fall back to the normal give-up path, never crash the task.
+                    const exit = yield* attemptEscalation(task, config.escalation).pipe(Effect.exit)
+                    const escalated = Exit.isSuccess(exit) ? exit.value : null
+                    if (escalated) {
+                        yield* Effect.promise(() => Telemetry.record({
+                            timestamp: new Date().toISOString(),
+                            modelId: config.escalation.model,
+                            provider: config.escalation.provider,
+                            capabilityLevel: level,
+                            creative: task.creative ?? false,
+                            temperatures: [0.3],
+                            repairAttempts: [0],
+                            verificationScores: [escalated.verification.score],
+                            verificationPassed: [escalated.verification.passed],
+                            formats: [Telemetry.detectChangeFormat(escalated.change)],
+                            resampleRetries: 0,
+                            selectedTemperature: escalated.temperature,
+                            selectedScore: escalated.rrpScore,
+                            confidence: escalated.rrpScore,
+                            passed: true,
+                            durationMs: Date.now() - start,
+                        }))
+                        return {
+                            selected: escalated,
+                            confidence: escalated.rrpScore,
+                            escalatedTo: `${config.escalation.provider}/${config.escalation.model}`,
+                        }
+                    }
+                }
+
                 return { selected: { ...best, rrpScore: 0 }, confidence: 0 }
             }
             const errors = repaired.flatMap(v => v.verification.errors)
@@ -169,6 +238,7 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
             repairAttempts,
             verificationScores: repaired.map(c => c.verification.score),
             verificationPassed: repaired.map(c => c.verification.passed),
+            formats,
             resampleRetries: retries,
             selectedTemperature: selected.temperature,
             selectedScore: selected.rrpScore,
@@ -178,6 +248,38 @@ export function sample(task: SamplingTask, retries = 0): Effect.Effect<SamplingR
         }))
 
         return { selected, confidence: selected.rrpScore }
+    })
+}
+
+// ─── Hybrid escalation ──────────────────────────────────────────────────────
+
+/**
+ * One attempt on the configured escalation model, only ever reached after the
+ * primary model has exhausted repair AND resample — i.e. after a verified
+ * failure, not a hunch. A single candidate at a conservative temperature is
+ * sampled (strong models don't need multi-candidate voting the way weak ones
+ * do), verified through the exact same pipeline, and graded like any other
+ * candidate so its rrpScore is comparable. Returns null on any failure
+ * (unreachable provider, bad model id, verification still fails) so the
+ * caller falls back to the pre-escalation give-up path unchanged.
+ */
+function attemptEscalation(
+    task: SamplingTask,
+    escalation: { provider: string; model: string },
+): Effect.Effect<(Candidate & { rrpScore: number }) | null, unknown> {
+    return Effect.gen(function* () {
+        const escalationModel = resolveModel(escalation.provider, escalation.model)
+        const candidate = yield* generateCandidate({ ...task, model: escalationModel }, 0.3)
+        const verified = yield* verifyCandidate(candidate, task.files)
+        if (!verified.verification.passed) return null
+
+        const graded = yield* Effect.tryPromise(() =>
+            Grader.gradeAll(
+                [{ ...verified, files: task.files }],
+                { creative: task.creative, model: escalationModel },
+            ),
+        )
+        return Voter.selectBest(graded)
     })
 }
 
@@ -268,20 +370,32 @@ function verifyCandidate(candidate: Candidate, files: string[]): Effect.Effect<C
 
 // ─── Project root detection ───────────────────────────────────────────────────
 
-/** Nearest ancestor of `files[0]` containing package.json/tsconfig.json, or
- *  process.cwd() if there are no files to anchor to. Exported so other
- *  components (e.g. the tool loop) that need "the project root for this task"
- *  use the exact same rule instead of a second, potentially divergent one. */
+/** Nearest ancestor of `files[0]` containing package.json/tsconfig.json, else
+ *  process.cwd(). Exported so other components (the tool loop, pre-step checks)
+ *  that need "the project root for this task" use the exact same rule instead
+ *  of a second, divergent one.
+ *
+ *  Relative target paths (e.g. "src/math.ts" — the common case when a plan
+ *  step names files relative to the working directory) are resolved against
+ *  process.cwd() first. The previous string-split walk returned the file's
+ *  parent segment ("src") when no manifest was found, which pointed
+ *  verification (`bun test`/`tsc`) at the wrong directory and mis-placed
+ *  generated check files (e.g. nested "src/test/test/"). Falling back to
+ *  process.cwd() — the actual working directory — is always a valid root. */
 export function detectProjectRoot(files: string[]): string {
-    if (files.length === 0) return process.cwd()
-    const parts = files[0]!.split("/")
-    for (let i = parts.length - 1; i > 0; i--) {
-        const dir = parts.slice(0, i).join("/")
-        if (existsSync(`${dir}/package.json`) || existsSync(`${dir}/tsconfig.json`)) {
+    const first = files[0]
+    if (!first) return process.cwd()
+
+    let dir = dirname(isAbsolute(first) ? first : resolve(process.cwd(), first))
+    while (true) {
+        if (existsSync(join(dir, "package.json")) || existsSync(join(dir, "tsconfig.json"))) {
             return dir
         }
+        const parent = dirname(dir)
+        if (parent === dir) break // reached the filesystem root
+        dir = parent
     }
-    return parts.slice(0, -1).join("/")
+    return process.cwd()
 }
 
 // ─── Code extraction (write generated code to target files) ───────────────────
