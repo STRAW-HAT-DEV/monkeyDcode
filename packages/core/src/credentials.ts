@@ -1,7 +1,8 @@
 import { homedir } from "os"
-import { join, dirname } from "path"
+import { join } from "path"
 import { existsSync } from "fs"
-import { mkdir, readFile, writeFile } from "fs/promises"
+import { readFile, writeFile } from "fs/promises"
+import { ensureParentDir } from "./util/path.ts"
 
 export interface ProviderCredentials {
     apiKey?: string
@@ -33,7 +34,7 @@ export async function loadCredentials(): Promise<Record<string, ProviderCredenti
 
 export async function saveCredentials(creds: Record<string, ProviderCredentials>): Promise<void> {
     const path = credentialsPath()
-    await mkdir(dirname(path), { recursive: true })
+    await ensureParentDir(path)
     await writeFile(path, JSON.stringify(creds, null, 2), { mode: 0o600 })
 }
 
