@@ -1,8 +1,9 @@
 import { Effect } from "effect"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
-import { readFile, writeFile, mkdir } from "fs/promises"
-import { join, dirname } from "path"
+import { readFile, writeFile } from "fs/promises"
+import { join } from "path"
+import { ensureParentDir } from "@monkeydcode/core/util/path"
 import { fileURLToPath } from "url"
 import { $ } from "bun"
 import * as Pipeline from "@monkeydcode/consistency/verification/pipeline"
@@ -48,7 +49,7 @@ export function fix(report: BugReport, model: ModelRef, modelId: string): Effect
         const testCode = extractCode(reproResponse.text)
         const testFile = join(projectRoot, lang.testDir, `bugfix-repro.${lang.testFileSuffix}`)
         yield* Effect.tryPromise(async () => {
-            await mkdir(dirname(testFile), { recursive: true })
+            await ensureParentDir(testFile)
             await writeFile(testFile, testCode)
         })
 

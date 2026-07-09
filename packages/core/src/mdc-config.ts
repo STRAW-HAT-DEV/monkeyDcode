@@ -1,7 +1,8 @@
 import { homedir } from "os"
-import { join, dirname } from "path"
+import { join } from "path"
 import { existsSync } from "fs"
-import { mkdir, readFile, writeFile } from "fs/promises"
+import { readFile, writeFile } from "fs/promises"
+import { ensureParentDir } from "./util/path.ts"
 
 export interface MdcConfig {
     model: string
@@ -175,7 +176,7 @@ function quoteToml(s: string): string {
 
 export async function saveConfig(config: MdcConfig): Promise<void> {
     const path = configPath()
-    await mkdir(dirname(path), { recursive: true })
+    await ensureParentDir(path)
 
     const lines = [
         "# monkeyDcode user config — model/provider set at first run",

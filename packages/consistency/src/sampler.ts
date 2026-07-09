@@ -1,7 +1,8 @@
 import { Effect, Exit } from "effect"
-import { readFile, writeFile, mkdir, rm } from "fs/promises"
+import { readFile, writeFile, rm } from "fs/promises"
 import { existsSync } from "fs"
 import { basename, extname, dirname, isAbsolute, join, resolve } from "path"
+import { ensureParentDir } from "@monkeydcode/core/util/path"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
 import { resolveModel } from "@monkeydcode/llm/resolve-model"
@@ -402,7 +403,7 @@ export function detectProjectRoot(files: string[]): string {
 
 /** Write a file, creating any missing parent directories (supports new files). */
 async function writeFileEnsuringDir(path: string, content: string): Promise<void> {
-    await mkdir(dirname(path), { recursive: true })
+    await ensureParentDir(path)
     await writeFile(path, content)
 }
 

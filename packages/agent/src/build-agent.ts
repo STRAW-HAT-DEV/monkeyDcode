@@ -1,7 +1,8 @@
 import { Effect, Exit } from "effect"
-import { readFile, writeFile, mkdir } from "fs/promises"
+import { readFile, writeFile } from "fs/promises"
 import { existsSync, readFileSync } from "fs"
-import { basename, extname, dirname } from "path"
+import { basename, extname } from "path"
+import { ensureParentDir } from "@monkeydcode/core/util/path"
 import * as Sampler from "@monkeydcode/consistency/sampler"
 import * as Retriever from "@monkeydcode/context/retriever"
 import * as Capability from "@monkeydcode/consistency/model-capability/detector"
@@ -346,7 +347,7 @@ ${fileList}`
 
 /** Write a file, creating any missing parent directories (supports new files). */
 async function writeFileEnsuringDir(path: string, content: string): Promise<void> {
-    await mkdir(dirname(path), { recursive: true })
+    await ensureParentDir(path)
     await writeFile(path, content, "utf-8")
     Changes.recordWrite(path)
 }

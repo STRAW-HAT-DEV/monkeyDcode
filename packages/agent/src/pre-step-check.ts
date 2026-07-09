@@ -16,8 +16,9 @@
  * plans at all.
  */
 import { Effect } from "effect"
-import { mkdir, rm, writeFile } from "fs/promises"
-import { dirname, join } from "path"
+import { rm, writeFile } from "fs/promises"
+import { join } from "path"
+import { ensureParentDir } from "@monkeydcode/core/util/path"
 import { $ } from "bun"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
@@ -61,7 +62,7 @@ export function createPreStepCheck(
         const path = join(projectRoot, lang.testDir, `check-${slug(description)}.${lang.testFileSuffix}`)
 
         yield* Effect.promise(async () => {
-            await mkdir(dirname(path), { recursive: true })
+            await ensureParentDir(path)
             await writeFile(path, generated, "utf-8")
         })
 
