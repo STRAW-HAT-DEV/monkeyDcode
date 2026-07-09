@@ -1,11 +1,12 @@
 // @ts-nocheck
-import { chmod, mkdir, readFile, stat as statFile, writeFile } from "fs/promises"
+import { chmod, readFile, stat as statFile, writeFile } from "fs/promises"
 import { createWriteStream, existsSync, statSync } from "fs"
 import { realpathSync } from "fs"
 import { dirname, isAbsolute, join, relative, resolve as pathResolve, win32 } from "path"
 import { Readable } from "stream"
 import { pipeline } from "stream/promises"
 import { Glob } from "@monkeydcode/core/util/glob"
+import { ensureParentDir, mkdirp } from "@monkeydcode/core/util/path"
 import { fileURLToPath } from "url"
 
 // Fast sync version for metadata checks
@@ -67,7 +68,7 @@ export async function write(p: string, content: string | Buffer | Uint8Array, mo
     }
   } catch (e) {
     if (isEnoent(e)) {
-      await mkdir(dirname(p), { recursive: true })
+      await ensureParentDir(p)
       if (mode) {
         await writeFile(p, content, { mode })
       } else {
@@ -88,10 +89,7 @@ export async function writeStream(
   stream: ReadableStream<Uint8Array> | Readable,
   mode?: number,
 ): Promise<void> {
-  const dir = dirname(p)
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true })
-  }
+  await mkdirp(dirname(p))
 
   const nodeStream = stream instanceof ReadableStream ? Readable.fromWeb(stream as any) : stream
   const writeStream = createWriteStream(p)
