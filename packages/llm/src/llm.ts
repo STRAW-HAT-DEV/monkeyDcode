@@ -186,7 +186,6 @@ async function fetchAndCollect(req: LLMRequest): Promise<LLMResponse> {
     const events: LLMEvent[] = []
     for await (const line of readLines(res.body!)) {
         events.push(...route.config.protocol!.parseChunk(line))
-        events.push(...route.config.protocol.parseChunk(line))
     }
     return buildResponseFromEvents(events)
 }
