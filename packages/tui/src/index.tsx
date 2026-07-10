@@ -87,9 +87,28 @@ function friendlyError(err: string): string {
 /** Human-readable message for the deepest meaningful error. */
 function describeError(e: unknown): string {
     const root = rootCause(e)
-    const code = (root as { code?: string })?.code
-    if (root instanceof Error) return code ? `[${code}] ${root.message}` : root.message
+    if (root instanceof Error) {
+        const code = (root as { code?: string }).code
+        return code ? `[${code}] ${root.message}` : root.message
+    }
     if (typeof root === "string") return root
+    // Effect failures, retriever errors, and rejected promises surface as plain
+    // objects like { message, _tag, code } — not Error instances. Pull the
+    // message out so we never fall through to the useless "[object Object]".
+    if (root && typeof root === "object") {
+        const o = root as { code?: string; message?: unknown; _tag?: unknown }
+        if (typeof o.message === "string" && o.message.length > 0) {
+            return o.code ? `[${o.code}] ${o.message}` : o.message
+        }
+        if (typeof o._tag === "string" && o._tag.length > 0) return o._tag
+        try {
+            const json = JSON.stringify(root)
+            // Prefer even "{}" over the useless "[object Object]".
+            if (typeof json === "string") return json
+        } catch {
+            // fall through to String() below (circular / non-serializable)
+        }
+    }
     return String(root)
 }
 
@@ -162,7 +181,7 @@ async function runTask(text: string): Promise<void> {
         await logAssistantToEngine(process.cwd(), engineSession.id, reply)
     } catch (e) {
         clearStatusLine()
-        printError(friendlyError(e instanceof Error ? e.message : String(e)))
+        printError(friendlyError(describeError(e)))
     } finally {
         unsubscribe()
         busy = false
