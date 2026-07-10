@@ -135,8 +135,14 @@ function maxRetries(): number {
 
 function isTransient(e: unknown): boolean {
     if (e instanceof LLMError) return TRANSIENT_CODES.has(e.code)
+    // SDK handlers (OpenAI/Anthropic) throw an APIError with an HTTP status
+    // rather than an LLMError — retry rate limits (429) and server errors (5xx).
+    const status = (e as { status?: unknown })?.status
+    if (typeof status === "number" && (status === 429 || status >= 500)) return true
+    const code = (e as { code?: unknown })?.code
+    if (typeof code === "string" && /rate_limit|ECONNRESET|ETIMEDOUT|ECONNREFUSED/i.test(code)) return true
     const msg = e instanceof Error ? e.message : String(e)
-    return /ECONNRESET|socket connection was closed|ETIMEDOUT|EPIPE|ECONNREFUSED|fetch failed|timed out/i.test(msg)
+    return /ECONNRESET|socket connection was closed|ETIMEDOUT|EPIPE|ECONNREFUSED|fetch failed|timed out|rate limit/i.test(msg)
 }
 
 /** Provider-suggested wait (ms) for a rate-limit error, parsed from the message. */
@@ -234,29 +240,31 @@ function buildResponseFromEvents(events: LLMEvent[]): LLMResponse {
 export const LLM = {
     generate(req: LLMRequest): Effect.Effect<LLMResponse, LLMError> {
         const route = resolveRoute(req)
+        const provider = req.model.provider
         if (route.config.handler) {
             return Effect.tryPromise({
-                try: () => route.config.handler!.generate(req),
-                catch: (e) => LLMError.from(e, req.model.provider),
+                try: () => withRetry(provider, () => route.config.handler!.generate(req)),
+                catch: (e) => LLMError.from(e, provider),
             })
         }
         return Effect.tryPromise({
-            try: () => withRetry(req.model.provider, () => fetchAndCollect(req)),
-            catch: (e: unknown) => LLMError.from(e, req.model.provider),
+            try: () => withRetry(provider, () => fetchAndCollect(req)),
+            catch: (e: unknown) => LLMError.from(e, provider),
         })
     },
 
     // Promise-based API — no Effect import needed in consuming code.
     async generateAsync(req: LLMRequest): Promise<LLMResponse> {
         const route = resolveRoute(req)
-        if (route.config.handler) {
-            try {
-                return await route.config.handler.generate(req)
-            } catch (e) {
-                throw LLMError.from(e, req.model.provider)
-            }
+        const provider = req.model.provider
+        const handler = route.config.handler
+        try {
+            return handler
+                ? await withRetry(provider, () => handler.generate(req))
+                : await withRetry(provider, () => fetchAndCollect(req))
+        } catch (e) {
+            throw LLMError.from(e, provider)
         }
-        return withRetry(req.model.provider, () => fetchAndCollect(req))
     },
 
     async *stream(req: LLMRequest): AsyncIterable<LLMEvent> {
