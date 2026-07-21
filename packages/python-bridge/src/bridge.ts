@@ -6,7 +6,7 @@ import { tmpdir } from "os"
 import { unlinkSync, existsSync } from "fs"
 
 const TOOLS_DIR = join(fileURLToPath(import.meta.url), "../../../../tools")
-const READY_TIMEOUT_MS = 15_000
+const READY_TIMEOUT_MS = Number(process.env["MDCODE_BRIDGE_READY_TIMEOUT_MS"]) || 15_000
 
 interface BridgeState {
     socket: Socket
@@ -35,10 +35,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     ])
 }
 
+// Cold `uv run python` boot (env resolve + module imports) measured at ~8.2s,
+// and connect() itself waits up to READY_TIMEOUT_MS (15s) for the server's
+// "ready" line. The outer guard must sit ABOVE both, or it aborts a bridge that
+// was about to come up — which is exactly what caused every session to fall back
+// to degraded, graph-less mode. Overridable for slower machines / first-ever run.
+const CONNECT_TIMEOUT_MS = Number(process.env["MDCODE_BRIDGE_CONNECT_TIMEOUT_MS"]) || 25_000
+
 async function getState(): Promise<BridgeState> {
     if (_state) return _state
     if (_connecting) return _connecting
-    _connecting = withTimeout(connect(), 8_000).finally(() => { _connecting = null })
+    _connecting = withTimeout(connect(), CONNECT_TIMEOUT_MS).finally(() => { _connecting = null })
     return _connecting
 }
 

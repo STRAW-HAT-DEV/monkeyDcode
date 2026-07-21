@@ -4,6 +4,8 @@ export type Stage =
     | "lint"
     | "tests"
     | "test-generated"
+    | "assets"
+    | "browser"
     | "smoke"
     | "complete"
 

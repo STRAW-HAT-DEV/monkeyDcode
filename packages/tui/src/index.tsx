@@ -5,6 +5,8 @@ import { initEngineSession, logUserToEngine, logAssistantToEngine, processWithEn
 import { handle as orchestrate } from "@monkeydcode/agent/orchestrator"
 import { subscribe as subscribeStatus } from "@monkeydcode/agent/status"
 import { runModelSetupWizard } from "@monkeydcode/core/model-setup"
+import { startMcpServer } from "@monkeydcode/mcp-server"
+import { startAcpAgent } from "@monkeydcode/acp"
 import { loadTuiConfig } from "./config.ts"
 import { parseArgv, printHelp, runDoctor, printShellInit, VERSION } from "./cli.ts"
 import { CREW, STATUS } from "./crew.ts"
@@ -37,6 +39,23 @@ switch (cli.mode) {
         break
     case "shell-init":
         printShellInit(cli.shell)
+        process.exit(0)
+        break
+    case "mcp-server":
+        // startMcpServer() resolves once the initial handshake completes —
+        // NOT when the session ends. The process must stay alive after that
+        // to answer tools/list and tools/call; calling process.exit() here
+        // would kill it before it can serve a single real request. The open
+        // stdio transport keeps the event loop alive on its own; the process
+        // exits naturally on EOF (parent closes the pipe) or SIGTERM.
+        await startMcpServer()
+        break
+    case "acp":
+        // Unlike startMcpServer(), startAcpAgent() genuinely awaits the
+        // connection's `closed` promise internally (see packages/acp's
+        // index.ts and its comment on why that distinction matters) — so
+        // exiting right after IS correct here, not the same footgun.
+        await startAcpAgent()
         process.exit(0)
         break
 }

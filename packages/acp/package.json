@@ -1,0 +1,24 @@
+{
+    "name": "@monkeydcode/acp",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "bun test"
+    },
+    "dependencies": {
+        "@agentclientprotocol/sdk": "1.3.0",
+        "@monkeydcode/agent": "workspace:*",
+        "@monkeydcode/core": "workspace:*",
+        "@monkeydcode/llm": "workspace:*",
+        "effect": "4.0.0-beta.66"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
+    }
+}
