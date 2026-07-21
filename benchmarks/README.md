@@ -1,4 +1,4 @@
-# Benchmark Runbook — producing the uplift number
+i# Benchmark Runbook — producing the uplift number
 
 The headline claim ("agent output ≫ raw model output") is measured by a
 three-arm comparison across all 14 tasks in `tasks/`. The harness is fully

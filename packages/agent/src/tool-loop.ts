@@ -31,9 +31,15 @@
 import { Effect } from "effect"
 import { existsSync, readdirSync, readFileSync, statSync } from "fs"
 import { isAbsolute, relative, resolve } from "path"
-import { $ } from "bun"
 import { LLM } from "@monkeydcode/llm"
 import type { ModelRef } from "@monkeydcode/llm"
+import { validateAssets, formatReport } from "@monkeydcode/consistency/verification/assets"
+import * as BrowserCheck from "@monkeydcode/consistency/verification/browser-check"
+import { execSandboxed } from "@monkeydcode/core/util/sandbox"
+import type { McpManager, QualifiedTool } from "@monkeydcode/mcp"
+import type { Ruleset } from "@monkeydcode/core/permission"
+import { checkPermission } from "./permissions.ts"
+import { isConfigured as isWebSearchConfigured, search as webSearch, formatResults as formatSearchResults, type WebSearchConfig } from "./web-search.ts"
 
 const MAX_ITERATIONS = 6
 const MAX_READ_CHARS = 8_000
@@ -46,6 +52,18 @@ export interface ToolLoopOptions {
     model: ModelRef
     projectRoot: string
     maxIterations?: number
+    /** Configured MCP servers this session may call (GAPS.md Part 2, C1) —
+     *  omitted or empty when the user has configured none, in which case the
+     *  MCP action is not even advertised in the menu. Still a closed menu:
+     *  the SERVERS come from user config (mcp-context.ts), never from model
+     *  text; the model only picks a tool NAME already present in `mcpManager.tools`. */
+    mcpManager?: McpManager
+    /** Empty/omitted = every RUN command and MCP tool is allowed (unconfigured
+     *  behavior, unchanged from before this existed). See permissions.ts. */
+    permissionRules?: Ruleset
+    /** Web search (GAPS.md Part 1, gap #6) — omitted unless the user has
+     *  configured a provider; SEARCH isn't even advertised in the menu otherwise. */
+    webSearchConfig?: WebSearchConfig
 }
 
 export interface ToolLoopResult {
@@ -61,6 +79,8 @@ type ParsedAction =
     | { kind: "read"; path: string }
     | { kind: "grep"; pattern: string; scope?: string }
     | { kind: "run"; name: string }
+    | { kind: "mcp"; qualifiedName: string; argsJson: string }
+    | { kind: "search"; query: string }
     | { kind: "answer" }
 
 // ─── Action vocabulary shown to the model ──────────────────────────────────
@@ -69,13 +89,27 @@ type ParsedAction =
 // call, after the whole module has initialized) rather than at module-eval
 // time, or it would hit the `const` temporal dead zone.
 
-function actionMenu(maxIterations: number): string {
+function mcpMenuLines(mcpTools: QualifiedTool[]): string {
+    if (mcpTools.length === 0) return ""
+    const list = mcpTools
+        .slice(0, 30) // keep the menu bounded even with several servers configured
+        .map(t => `    - ${t.qualifiedName}${t.description ? `: ${t.description}` : ""}`)
+        .join("\n")
+    return `\n  MCP <server>.<tool> {"arg": "value"}  — call a connected external tool; JSON args on the SAME line
+  Available MCP tools:\n${list}\n`
+}
+
+function searchMenuLine(webSearchEnabled: boolean): string {
+    return webSearchEnabled ? "  SEARCH <query>           — search the web for current information\n" : ""
+}
+
+function actionMenu(maxIterations: number, mcpTools: QualifiedTool[], webSearchEnabled: boolean): string {
     return `You may investigate before answering. On each turn, respond with EXACTLY ONE line — either an action or your final answer:
 
   READ <path>              — show the current contents of a file (relative to the project root)
   GREP <pattern> [IN <path>] — search the project for a regex pattern, optionally scoped to a subpath
   RUN <name>                — run a known diagnostic; <name> is one of: ${Object.keys(RUN_COMMANDS).join(", ")}
-
+${searchMenuLine(webSearchEnabled)}${mcpMenuLines(mcpTools)}
 When you have enough information, stop investigating and produce your final answer directly
 (no action keyword) in the exact output format requested by the task.
 
@@ -92,11 +126,14 @@ You have at most ${maxIterations} investigation turns before you must answer.`
  */
 export function run(basePrompt: string, options: ToolLoopOptions): Effect.Effect<ToolLoopResult, unknown> {
     const maxIterations = options.maxIterations ?? MAX_ITERATIONS
+    const mcpTools = options.mcpManager?.tools ?? []
+    const permissionRules = options.permissionRules ?? []
+    const webSearchEnabled = options.webSearchConfig ? isWebSearchConfigured(options.webSearchConfig) : false
     return Effect.gen(function* () {
         const transcriptEntries: string[] = []
 
         for (let i = 0; i < maxIterations; i++) {
-            const prompt = buildTurnPrompt(basePrompt, transcriptEntries, maxIterations)
+            const prompt = buildTurnPrompt(basePrompt, transcriptEntries, maxIterations, mcpTools, webSearchEnabled)
             const response = yield* Effect.promise(() =>
                 LLM.generateAsync({ model: options.model, messages: [{ role: "user", content: prompt }] }),
             )
@@ -110,7 +147,9 @@ export function run(basePrompt: string, options: ToolLoopOptions): Effect.Effect
                 }
             }
 
-            const observation = yield* Effect.promise(() => execute(action, options.projectRoot))
+            const observation = yield* Effect.promise(() =>
+                execute(action, options.projectRoot, options.mcpManager, permissionRules, options.webSearchConfig),
+            )
             transcriptEntries.push(
                 `### Turn ${i + 1}: ${describeAction(action)}\n${truncate(observation, MAX_OBSERVATION_CHARS)}`,
             )
@@ -118,7 +157,7 @@ export function run(basePrompt: string, options: ToolLoopOptions): Effect.Effect
 
         // Iteration cap reached without an answer — force one, with everything
         // gathered so far. Never leave the caller with no result.
-        const finalPrompt = `${buildTurnPrompt(basePrompt, transcriptEntries, maxIterations)}\n\nYou have used all investigation turns. Answer now — no more actions.`
+        const finalPrompt = `${buildTurnPrompt(basePrompt, transcriptEntries, maxIterations, mcpTools, webSearchEnabled)}\n\nYou have used all investigation turns. Answer now — no more actions.`
         const finalResponse = yield* Effect.promise(() =>
             LLM.generateAsync({ model: options.model, messages: [{ role: "user", content: finalPrompt }] }),
         )
@@ -130,11 +169,17 @@ export function run(basePrompt: string, options: ToolLoopOptions): Effect.Effect
     })
 }
 
-function buildTurnPrompt(basePrompt: string, transcriptEntries: string[], maxIterations: number): string {
+function buildTurnPrompt(
+    basePrompt: string,
+    transcriptEntries: string[],
+    maxIterations: number,
+    mcpTools: QualifiedTool[],
+    webSearchEnabled: boolean,
+): string {
     const transcript = transcriptEntries.length > 0
         ? `\n\n## Investigation so far\n${transcriptEntries.join("\n\n")}`
         : ""
-    return `${actionMenu(maxIterations)}\n\n## Task\n${basePrompt}${transcript}`
+    return `${actionMenu(maxIterations, mcpTools, webSearchEnabled)}\n\n## Task\n${basePrompt}${transcript}`
 }
 
 function describeAction(action: ParsedAction): string {
@@ -142,6 +187,8 @@ function describeAction(action: ParsedAction): string {
         case "read": return `READ ${action.path}`
         case "grep": return `GREP ${action.pattern}${action.scope ? ` IN ${action.scope}` : ""}`
         case "run": return `RUN ${action.name}`
+        case "mcp": return `MCP ${action.qualifiedName}`
+        case "search": return `SEARCH ${action.query}`
         case "answer": return "ANSWER"
     }
 }
@@ -163,16 +210,36 @@ function parseAction(text: string): ParsedAction {
     m = /^RUN\s+(\S+)$/i.exec(firstLine)
     if (m) return { kind: "run", name: m[1]!.trim().toLowerCase() }
 
+    // Server id has no dots (config key); tool name may. Args are optional
+    // text on the same line — captured permissively (not required to look
+    // like balanced JSON) so genuinely malformed args still route to
+    // executeMcp's JSON.parse error instead of silently falling through to
+    // "answer" (which would make a garbled tool call look like a real,
+    // confusing final answer).
+    m = /^MCP\s+([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_.-]+)(?:\s+(.+))?$/i.exec(firstLine)
+    if (m) return { kind: "mcp", qualifiedName: `${m[1]}.${m[2]}`, argsJson: m[3] ?? "{}" }
+
+    m = /^SEARCH\s+(.+)$/i.exec(firstLine)
+    if (m) return { kind: "search", query: m[1]!.trim() }
+
     return { kind: "answer" }
 }
 
 // ─── Execution ──────────────────────────────────────────────────────────────
 
-function execute(action: ParsedAction, projectRoot: string): Promise<string> {
+function execute(
+    action: ParsedAction,
+    projectRoot: string,
+    mcpManager: McpManager | undefined,
+    permissionRules: Ruleset,
+    webSearchConfig: WebSearchConfig | undefined,
+): Promise<string> {
     switch (action.kind) {
         case "read": return executeRead(projectRoot, action.path)
         case "grep": return executeGrep(projectRoot, action.pattern, action.scope)
-        case "run": return executeRun(projectRoot, action.name)
+        case "run": return executeRun(projectRoot, action.name, permissionRules)
+        case "mcp": return executeMcp(action.qualifiedName, action.argsJson, mcpManager, permissionRules)
+        case "search": return executeSearch(action.query, webSearchConfig, permissionRules)
         case "answer": return Promise.resolve("")
     }
 }
@@ -286,6 +353,12 @@ function withTimeout(promise: Promise<string>, ms: number, label: string): Promi
     ])
 }
 
+// Diagnostics run through execSandboxed (packages/core/util/sandbox.ts):
+// env-allowlisted always, wrapped in bwrap/sandbox-exec with network disabled
+// when a sandboxer is available (Linux/macOS) — a read-only investigation
+// command has no legitimate need for network access. On Windows, or when no
+// sandboxer is installed, this degrades to env-allowlisting only (see that
+// module's header for why true OS sandboxing isn't available there).
 const RUN_COMMANDS: Record<string, RunCommand> = {
     typecheck: {
         description: "run the project's typecheck script",
@@ -295,8 +368,8 @@ const RUN_COMMANDS: Record<string, RunCommand> = {
             }
             return withTimeout(
                 (async () => {
-                    const r = await $`bun run typecheck`.cwd(root).quiet().nothrow()
-                    return (r.stdout.toString() + r.stderr.toString()) || `(no output, exit ${r.exitCode})`
+                    const r = await execSandboxed(["bun", "run", "typecheck"], { cwd: root })
+                    return (r.stdout + r.stderr) || `(no output, exit ${r.exitCode})`
                 })(),
                 RUN_TIMEOUT_MS,
                 "typecheck",
@@ -311,8 +384,8 @@ const RUN_COMMANDS: Record<string, RunCommand> = {
             }
             return withTimeout(
                 (async () => {
-                    const r = await $`bun test`.cwd(root).quiet().nothrow()
-                    return (r.stdout.toString() + r.stderr.toString()) || `(no output, exit ${r.exitCode})`
+                    const r = await execSandboxed(["bun", "test"], { cwd: root })
+                    return (r.stdout + r.stderr) || `(no output, exit ${r.exitCode})`
                 })(),
                 RUN_TIMEOUT_MS,
                 "test",
@@ -322,29 +395,205 @@ const RUN_COMMANDS: Record<string, RunCommand> = {
     "git-diff": {
         description: "show uncommitted changes",
         exec: async root => {
-            const r = await $`git diff HEAD`.cwd(root).quiet().nothrow()
-            return r.stdout.toString() || "(no changes)"
+            const r = await execSandboxed(["git", "diff", "HEAD"], { cwd: root })
+            return r.stdout || "(no changes)"
         },
     },
     "git-status": {
         description: "show working tree status",
         exec: async root => {
-            const r = await $`git status --short`.cwd(root).quiet().nothrow()
-            return r.stdout.toString() || "(clean)"
+            const r = await execSandboxed(["git", "status", "--short"], { cwd: root })
+            return r.stdout || "(clean)"
+        },
+    },
+    "check-assets": {
+        // Extracts every image/link/stylesheet reference from the project's own
+        // HTML/CSS/Markdown and reports which ones are DEAD (remote URL 4xx/5xx,
+        // or a local file that doesn't exist). This is how the model discovers a
+        // broken <img src> — a bug class no `bun test` can surface. Parameterless
+        // by design: the URLs come from the user's files, never from model text,
+        // so it adds a capability without opening an injection/SSRF surface.
+        description: "validate that referenced images, links, and stylesheets actually resolve",
+        exec: async root => {
+            const files = await findAssetBearingFiles(root)
+            if (files.length === 0) return "No HTML/CSS/Markdown files found to check."
+            const results = await validateAssets(files, root)
+            return formatReport(results)
+        },
+    },
+    "check-render": {
+        // Complements check-assets with an actual headless-browser render of
+        // the project's HTML entry point — catches what a regex scan can't:
+        // a JS-injected broken <img>, a redirect, a CORS failure. Optional
+        // (Playwright must be installed) and reports that plainly rather
+        // than erroring, so it's always safe for the model to try.
+        description: "render the project's HTML entry point in a headless browser and report failed resource loads / console errors",
+        exec: async root => {
+            if (!(await BrowserCheck.isAvailable())) {
+                return "Playwright isn't installed, so a real browser render isn't available. " +
+                    "(bun add playwright && bunx playwright install chromium to enable.) " +
+                    "Falling back: RUN check-assets for a static reference check instead."
+            }
+            const htmlFiles = await findAssetBearingFiles(root)
+            const entry = htmlFiles.find(f => /\.html?$/i.test(f))
+            if (!entry) return "No HTML file found to render."
+            const result = await BrowserCheck.checkPage(`file://${resolve(root, entry).replace(/\\/g, "/")}`)
+            if (!result) return `Render of ${entry} failed or timed out.`
+            if (result.failedRequests.length === 0 && result.consoleErrors.length === 0) {
+                return `${entry} rendered cleanly — no failed requests, no console errors.`
+            }
+            const failed = result.failedRequests
+                .map(r => `  DEAD: ${r.url}${r.status ? ` (${r.status})` : ""}${r.failure ? ` — ${r.failure}` : ""}`)
+                .join("\n")
+            const consoleErrs = result.consoleErrors.map(c => `  WARN (console): ${c.text}`).join("\n")
+            return [failed, consoleErrs].filter(Boolean).join("\n")
         },
     },
 }
 
-async function executeRun(root: string, name: string): Promise<string> {
+const ASSET_FILE_EXT = new Set(["html", "htm", "css", "md", "markdown", "svg"])
+
+/** Find asset-reference-bearing files under the project root (bounded, ignoring
+ *  the usual noise dirs) so `check-assets` can run without a model-supplied path. */
+async function findAssetBearingFiles(root: string): Promise<string[]> {
+    const glob = new Bun.Glob("**/*")
+    const files: string[] = []
+    for await (const rel of glob.scan({ cwd: root, dot: false })) {
+        if (IGNORED_DIR_SEGMENTS.some(seg => rel.includes(`${seg}/`) || rel.includes(`${seg}\\`))) continue
+        const ext = rel.split(".").pop()?.toLowerCase() ?? ""
+        if (ASSET_FILE_EXT.has(ext)) files.push(rel)
+        if (files.length >= 200) break
+    }
+    return files
+}
+
+async function executeRun(root: string, name: string, permissionRules: Ruleset): Promise<string> {
     const command = RUN_COMMANDS[name]
     if (!command) {
         return `ERROR: unknown RUN target "${name}". Available: ${Object.keys(RUN_COMMANDS).join(", ")}`
     }
+    const permission = checkPermission(permissionRules, "run", name)
+    if (!permission.allowed) return `REFUSED: ${permission.reason}`
     try {
         const output = await command.exec(root)
         return truncate(output, MAX_OBSERVATION_CHARS)
     } catch (e) {
         return `ERROR running ${name}: ${String(e)}`
+    }
+}
+
+// ─── MCP: closed-server, schema-checked tool calls ─────────────────────────
+// The SERVER set is a closed menu exactly like RUN_COMMANDS — it comes from
+// the user's mdc-config.toml (see mcp-context.ts), never from model text.
+// What's new here is that the model supplies structured JSON *arguments* to
+// an external tool, which RUN's parameterless commands never allowed. Three
+// gates before anything reaches a real process: (1) the qualified name must
+// already be in the tool list handed to this session — an unlisted name is
+// rejected with no call attempted; (2) the JSON must parse; (3) it must pass
+// a shallow structural check against the tool's own declared input schema
+// (required fields present, declared types match) — catching the common
+// malformed-args case before spending a round trip on it.
+
+const MAX_MCP_TIMEOUT_MS = 30_000
+
+/** Not a full JSON-Schema validator (no $ref/oneOf/pattern support) — a
+ *  deliberately shallow required/type check. Good enough to reject an
+ *  obviously wrong call; the server is still the ground truth for anything
+ *  more nuanced, exactly as it would be for a hand-written client. */
+function validateArgsShallow(schema: QualifiedTool["inputSchema"], args: unknown): string | null {
+    if (typeof args !== "object" || args === null || Array.isArray(args)) {
+        return "arguments must be a JSON object"
+    }
+    const s = schema as { required?: string[]; properties?: Record<string, { type?: string }> } | undefined
+    const record = args as Record<string, unknown>
+
+    for (const key of s?.required ?? []) {
+        if (!(key in record)) return `missing required argument "${key}"`
+    }
+    for (const [key, value] of Object.entries(record)) {
+        const expected = s?.properties?.[key]?.type
+        if (!expected) continue
+        const actual = Array.isArray(value) ? "array" : value === null ? "null" : typeof value
+        const typeMap: Record<string, string[]> = {
+            string: ["string"],
+            number: ["number"],
+            integer: ["number"],
+            boolean: ["boolean"],
+            object: ["object"],
+            array: ["array"],
+            null: ["null"],
+        }
+        const allowed = typeMap[expected]
+        if (allowed && !allowed.includes(actual)) {
+            return `argument "${key}" should be ${expected}, got ${actual}`
+        }
+    }
+    return null
+}
+
+async function executeMcp(
+    qualifiedName: string,
+    argsJson: string,
+    mcpManager: McpManager | undefined,
+    permissionRules: Ruleset,
+): Promise<string> {
+    if (!mcpManager || mcpManager.tools.length === 0) {
+        return "ERROR: no MCP servers are configured for this session."
+    }
+    const tool = mcpManager.tools.find(t => t.qualifiedName === qualifiedName)
+    if (!tool) {
+        const available = mcpManager.tools.map(t => t.qualifiedName).join(", ") || "(none)"
+        return `ERROR: unknown MCP tool "${qualifiedName}". Available: ${available}`
+    }
+
+    const permission = checkPermission(permissionRules, "mcp", qualifiedName)
+    if (!permission.allowed) return `REFUSED: ${permission.reason}`
+
+    let args: unknown
+    try {
+        args = JSON.parse(argsJson)
+    } catch {
+        return `ERROR: could not parse arguments as JSON: ${argsJson.slice(0, 200)}`
+    }
+
+    const validationError = validateArgsShallow(tool.inputSchema, args)
+    if (validationError) return `ERROR: invalid arguments for ${qualifiedName} — ${validationError}`
+
+    try {
+        const output = await mcpManager.callTool(
+            tool.server,
+            tool.name,
+            args as Record<string, unknown>,
+            MAX_MCP_TIMEOUT_MS,
+        )
+        return truncate(output, MAX_OBSERVATION_CHARS)
+    } catch (e) {
+        return `ERROR calling ${qualifiedName}: ${e instanceof Error ? e.message : String(e)}`
+    }
+}
+
+// ─── Web search: config-gated, permission-gated ────────────────────────────
+// Unlike RUN/MCP, the "destination" here (Brave's API) is fixed by the
+// provider check inside web-search.ts's search(), not by anything the model
+// supplies — the model only ever controls the query text, the same
+// trust boundary GREP already has for its regex pattern.
+
+async function executeSearch(
+    query: string,
+    config: WebSearchConfig | undefined,
+    permissionRules: Ruleset,
+): Promise<string> {
+    if (!config || !isWebSearchConfigured(config)) {
+        return "ERROR: web search is not configured for this session."
+    }
+    const permission = checkPermission(permissionRules, "search", "web")
+    if (!permission.allowed) return `REFUSED: ${permission.reason}`
+
+    try {
+        const results = await webSearch(query, config)
+        return truncate(formatSearchResults(results), MAX_OBSERVATION_CHARS)
+    } catch (e) {
+        return `ERROR searching: ${e instanceof Error ? e.message : String(e)}`
     }
 }
 

@@ -18,6 +18,8 @@
         "./verification/stage-selector": "./src/verification/stage-selector.ts",
         "./verification/test-existing": "./src/verification/test-existing.ts",
         "./verification/screenshot": "./src/verification/screenshot.ts",
+        "./verification/assets": "./src/verification/assets.ts",
+        "./verification/browser-check": "./src/verification/browser-check.ts",
         "./verification/syntax": "./src/verification/syntax.ts",
         "./verification/load-config": "./src/verification/load-config.ts",
         "./verification/verify-tool": "./src/verification/verify-tool.ts"

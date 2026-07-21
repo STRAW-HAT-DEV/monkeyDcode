@@ -1,6 +1,6 @@
 import { VERSION } from "./version.ts"
 
-export type CliMode = "interactive" | "oneshot" | "help" | "version" | "doctor" | "setup" | "shell-init"
+export type CliMode = "interactive" | "oneshot" | "help" | "version" | "doctor" | "setup" | "shell-init" | "mcp-server" | "acp"
 export { VERSION }
 
 export interface CliArgs {
@@ -32,6 +32,10 @@ export function printHelp(): void {
   mdc doctor             Check dependencies
   mdc version            Show version
   mdc shell-init bash    Print shell hook (optional)
+  mdc mcp-server          Run monkeyDcode as an MCP server (stdio) — exposes
+                          mdc_build/mdc_verify/mdc_check_assets to MCP clients
+  mdc acp                 Run monkeyDcode as an ACP agent (stdio) — for
+                          editors that speak the Agent Client Protocol (Zed, etc.)
 
 Global install:
   macOS/Linux:  curl -fsSL .../install.sh | bash
@@ -58,6 +62,8 @@ export function parseArgv(argv: string[]): CliArgs {
     if (first === "--version" || first === "-v" || first === "version") return { mode: "version" }
     if (first === "doctor" || first === "check") return { mode: "doctor" }
     if (first === "setup" || first === "configure" || first === "config") return { mode: "setup" }
+    if (first === "mcp-server") return { mode: "mcp-server" }
+    if (first === "acp") return { mode: "acp" }
     if (first === "shell-init") {
         const shell = (args[1] ?? "bash") as CliArgs["shell"]
         return { mode: "shell-init", shell }

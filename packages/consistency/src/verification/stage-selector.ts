@@ -19,7 +19,7 @@ const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
 ])
 
 /** Stages that remain meaningful for static, non-code assets (HTML/CSS/MD/...). */
-const STATIC_SAFE_STAGES: ReadonlySet<Stage> = new Set<Stage>(["syntax", "smoke"])
+const STATIC_SAFE_STAGES: ReadonlySet<Stage> = new Set<Stage>(["syntax", "assets", "browser", "smoke"])
 
 function extensionOf(file: string): string {
     return extname(file).replace(".", "").toLowerCase()

@@ -15,6 +15,7 @@ import * as Enhancer from "./prompt-enhancer.ts"
 import * as Scaffold from "./scaffold.ts"
 import * as ReviewAgent from "./review-agent.ts"
 import * as BugFix from "./sub-agents/bugfix.ts"
+import * as AssetFix from "./sub-agents/asset-fix.ts"
 import * as Feature from "./sub-agents/feature.ts"
 import * as Refactor from "./sub-agents/refactor.ts"
 import * as Debug from "./sub-agents/debug.ts"
@@ -22,10 +23,14 @@ import * as Status from "./status.ts"
 import * as WorkingMemory from "./working-memory.ts"
 import * as Changes from "./changes.ts"
 import * as RepoMap from "./repo-map.ts"
+import * as RepoInstructions from "./repo-instructions.ts"
 
 const PROMPTS = join(fileURLToPath(import.meta.url), "../prompts")
 
-type Category = "bug_fix" | "feature" | "refactor" | "debug" | "chat" | "general"
+// "asset_fix" is never emitted by classify() — it's assigned deterministically
+// by isAssetBug() for broken-image/link/stylesheet requests, which the code
+// classifier can't reliably tell apart from an ordinary edit.
+type Category = "bug_fix" | "feature" | "refactor" | "debug" | "chat" | "general" | "asset_fix"
 
 let contextInitialized = false
 
@@ -39,7 +44,17 @@ export function handle(
         yield* WorkingMemory.setGoal(message)
         Status.emit({ agent: "luffy", action: "Classifying request..." })
 
-        const category = yield* classify(message, model, history)
+        let category = yield* classify(message, model, history)
+
+        // A broken image / dead link / missing stylesheet is an ASSET-reference
+        // problem, not code logic — and neither the reproduction-test bug-fixer
+        // nor the generic planner reliably handles it (the planner wrote a stray
+        // test file and never touched the HTML). Route ANY such request — however
+        // it was classified — to the deterministic asset fixer, which locates the
+        // dead reference itself instead of hoping the model does.
+        if (category !== "chat" && isAssetBug(message)) {
+            category = "asset_fix"
+        }
 
         // Fast path: conversational input never touches the build/verify/review pipeline.
         // History gives the agent memory of what it did in earlier turns.
@@ -56,10 +71,21 @@ export function handle(
         // blind to what was built in earlier turns. Fold recent history into
         // the task text so it reaches the enhancer/scaffold/planner/sub-agents
         // without having to thread a `history` param through all of them.
-        const augmentedMessage = message + formatHistoryContext(history)
+        // Repo-level instructions (AGENTS.md/CLAUDE.md) are folded in the same
+        // way, for the same reason — every downstream consumer gets them for
+        // free through the one `augmentedMessage` string, with no per-caller
+        // threading. A missing/unreadable instruction file degrades to "" and
+        // changes nothing about existing behavior.
+        const repoInstructions = yield* Effect.promise(() => RepoInstructions.loadRepoInstructions(process.cwd()))
+        const augmentedMessage = message + formatHistoryContext(history) + formatRepoInstructions(repoInstructions)
 
         // Reset the per-task write tracker so we can report exactly what changed.
         Changes.reset()
+
+        // Captured by the asset_fix branch so its findings reach the final
+        // message even when it makes no change (dead ref it couldn't replace,
+        // or nothing broken at all).
+        let assetOutcome: AssetFix.AssetFixOutcome | null = null
 
         if (!contextInitialized) {
             yield* initSessionContext(process.cwd())
@@ -93,19 +119,20 @@ export function handle(
                 yield* Debug.debug(augmentedMessage, model, modelId)
                 break
 
-            default: {
-                const scaffolded = yield* tryScaffold(augmentedMessage, model, modelId)
-                if (!scaffolded.handled) {
-                    Status.emit({ agent: "luffy", action: "Creating plan..." })
-                    const plan = yield* PlanAgent.plan(scaffolded.task, model, modelId)
-                    Status.emit({
-                        agent: "franky",
-                        action: `Executing ${plan.steps.length} steps (level ${plan.decompositionLevel})...`,
-                        plan,
-                        progress: { current: 0, total: plan.steps.length },
-                    })
-                    yield* BuildAgent.executePlan(plan, model, modelId)
+            case "asset_fix": {
+                Status.emit({ agent: "franky", action: "Validating asset references..." })
+                assetOutcome = yield* AssetFix.fix(augmentedMessage, model, process.cwd())
+                // No dead reference found — the reported "not rendering" is
+                // something else (CSS hiding it, wrong size, layout). Fall back to
+                // a real edit attempt rather than declaring victory with no change.
+                if (!assetOutcome.hadBrokenRefs) {
+                    yield* generalBuild(augmentedMessage, model, modelId)
                 }
+                break
+            }
+
+            default: {
+                yield* generalBuild(augmentedMessage, model, modelId)
             }
         }
 
@@ -115,6 +142,12 @@ export function handle(
         const changed = Changes.take()
         if (changed.length === 0) {
             Status.emit({ agent: "idle", action: "Done" })
+            // Asset fix ran but changed nothing: tell the user what it actually
+            // found instead of a blank "no changes" — the difference between
+            // "couldn't replace this dead URL" and "nothing was broken".
+            if (assetOutcome) {
+                return `Done (asset_fix). No files changed.\n\n${assetOutcome.summary}`
+            }
             return `Done (${category}). No file changes were produced.`
         }
         // The next plan() call in this session should see files this task just
@@ -204,6 +237,28 @@ interface ScaffoldOutcome {
 }
 
 /**
+ * The general build path: scaffold when the task has a known single-artifact
+ * shape, otherwise plan → execute. Shared by the `default` route and the
+ * asset-fix fallback (when the reported problem turns out not to be a dead
+ * reference), so both behave identically.
+ */
+function generalBuild(task: string, model: ModelRef, modelId: string): Effect.Effect<void, unknown> {
+    return Effect.gen(function* () {
+        const scaffolded = yield* tryScaffold(task, model, modelId)
+        if (scaffolded.handled) return
+        Status.emit({ agent: "luffy", action: "Creating plan..." })
+        const plan = yield* PlanAgent.plan(scaffolded.task, model, modelId)
+        Status.emit({
+            agent: "franky",
+            action: `Executing ${plan.steps.length} steps (level ${plan.decompositionLevel})...`,
+            plan,
+            progress: { current: 0, total: plan.steps.length },
+        })
+        yield* BuildAgent.executePlan(plan, model, modelId)
+    })
+}
+
+/**
  * Enhance the request into a precise spec, then — for task types with a known
  * single-artifact shape (e.g. a web page) — build it directly via a tight
  * scaffold instead of the generic planner. Returns the enhanced task so callers
@@ -258,6 +313,10 @@ function formatHistoryContext(history: Message[]): string {
     )
 }
 
+function formatRepoInstructions(instructions: string): string {
+    return instructions.length === 0 ? "" : `\n\n${instructions}`
+}
+
 function chatReply(
     message: string,
     model: ModelRef,
@@ -302,6 +361,17 @@ function deterministicClassify(message: string): Category | null {
     if (GREETING_PATTERN.test(trimmed)) return "chat"
     if (STACK_TRACE_PATTERN.test(message)) return "debug"
     return null
+}
+
+/** True when a "bug" is really about a broken asset reference (image/link/
+ *  stylesheet not loading) rather than faulty code logic — a distinction the
+ *  reproduction-test bug-fixer can't act on, but check-assets + the asset
+ *  verification stage can. Deterministic and pure: same routing on every model. */
+function isAssetBug(message: string): boolean {
+    const m = message.toLowerCase()
+    const mentionsAsset = /\b(image|img|logo|icon|favicon|picture|photo|banner|thumbnail|screenshot|stylesheet|css|link|url|asset|src|href|font)\b/.test(m)
+    const mentionsBreakage = /\b(not\s+(render|load|show|display|appear|visible)|render(ing|ed)?|load(ing|ed)?|display(ing|ed)?|broken|dead|missing|placeholder|blank|empty|404|doesn'?t\s+(work|show|load|render|appear)|won'?t\s+(load|show|render|appear)|can'?t\s+(see|find))\b/.test(m)
+    return mentionsAsset && mentionsBreakage
 }
 
 function classify(message: string, model: ModelRef, history: Message[] = []): Effect.Effect<Category, unknown> {
