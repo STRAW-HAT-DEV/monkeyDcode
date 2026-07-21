@@ -7,6 +7,8 @@ import * as Lint from "./lint.ts"
 import * as Tests from "./test-existing.ts"
 import * as Generated from "./test-generated.ts"
 import * as Smoke from "./smoke.ts"
+import * as Assets from "./assets.ts"
+import * as BrowserCheck from "./browser-check.ts"
 import { loadVerificationConfig } from "./load-config.ts"
 import { defaultStageSelector, type StageSelector } from "./stage-selector.ts"
 
@@ -17,6 +19,8 @@ const STAGE_WEIGHTS: Record<string, number> = {
     lint: 0.10,
     tests: 0.30,
     "test-generated": 0.15,
+    assets: 0.05,
+    browser: 0.05,
     smoke: 0.10,
 }
 
@@ -69,6 +73,20 @@ export async function run(
         stages["test-generated"] = r
         if (!r.passed) return fail("test-generated", r.errors, score, stages, start)
         score += STAGE_WEIGHTS["test-generated"]!
+    }
+
+    if (activeStages.includes("assets")) {
+        const r = await Assets.check(files, projectRoot, timeoutFor(resolved, "assets"))
+        stages.assets = r
+        if (!r.passed) return fail("assets", r.errors, score, stages, start)
+        score += STAGE_WEIGHTS.assets!
+    }
+
+    if (activeStages.includes("browser")) {
+        const r = await BrowserCheck.run(files, projectRoot, timeoutFor(resolved, "browser"))
+        stages.browser = r
+        if (!r.passed) return fail("browser", r.errors, score, stages, start)
+        score += STAGE_WEIGHTS.browser!
     }
 
     if (activeStages.includes("smoke")) {

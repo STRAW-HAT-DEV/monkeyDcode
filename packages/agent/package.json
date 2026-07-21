@@ -17,7 +17,11 @@
         "./working-memory": "./src/working-memory.ts",
         "./task-type": "./src/task-type.ts",
         "./prompt-enhancer": "./src/prompt-enhancer.ts",
-        "./scaffold": "./src/scaffold.ts"
+        "./scaffold": "./src/scaffold.ts",
+        "./mcp-context": "./src/mcp-context.ts",
+        "./repo-instructions": "./src/repo-instructions.ts",
+        "./permissions": "./src/permissions.ts",
+        "./web-search": "./src/web-search.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
@@ -31,6 +35,11 @@
         "@monkeydcode/engine": "workspace:*",
         "@monkeydcode/hashline": "workspace:*",
         "@monkeydcode/llm": "workspace:*",
+        "@monkeydcode/mcp": "workspace:*",
         "effect": "4.0.0-beta.66"
+    },
+    "devDependencies": {
+        "@modelcontextprotocol/sdk": "1.29.0",
+        "zod": "4.1.8"
     }
 }

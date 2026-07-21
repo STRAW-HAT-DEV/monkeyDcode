@@ -1,0 +1,8 @@
+export { connect } from "./client.ts"
+export type { McpConnection, McpConnectResult, McpToolSummary } from "./client.ts"
+export { createManager, emptyManager } from "./manager.ts"
+export type { McpManager, McpServerStatus, QualifiedTool } from "./manager.ts"
+export { isMcpServerConfig, DEFAULT_MCP_TIMEOUT_MS } from "./config.ts"
+export type { McpServerConfig, McpLocalServerConfig, McpRemoteServerConfig } from "./config.ts"
+export { startStdioServer } from "./server.ts"
+export type { McpToolDefinition, McpToolResult, McpServerInfo } from "./server.ts"

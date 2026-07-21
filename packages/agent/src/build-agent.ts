@@ -26,6 +26,9 @@ import * as Changes from "./changes.ts"
 import { assertCanWrite } from "./registry.ts"
 import * as ToolLoop from "./tool-loop.ts"
 import * as PreStepCheck from "./pre-step-check.ts"
+import { getMcpManager } from "./mcp-context.ts"
+import { getPermissionRules } from "./permissions.ts"
+import { getWebSearchConfig } from "./web-search.ts"
 
 export type { Plan, PlanStep }
 
@@ -224,11 +227,23 @@ already have everything you need, respond with a one-line summary of your
 plan — do NOT write the final code in this step.`
 
         const projectRoot = Sampler.detectProjectRoot(step.targetFiles)
+        // Session-scoped — the first recon call in a session pays the MCP
+        // connection cost, every later call (and later step) reuses it.
+        const mcpManager = yield* Effect.promise(() => getMcpManager())
+        const permissionRules = yield* Effect.promise(() => getPermissionRules())
+        const webSearchConfig = yield* Effect.promise(() => getWebSearchConfig())
         // Best-effort via Effect.exit: the tool loop calls the model via
         // Effect.promise (rejection → DEFECT). Recon is optional — any
         // non-success degrades to "no transcript," never crashes the step.
         // (See the pre-step-check note above on why Effect.catch is wrong here.)
-        const exit = yield* ToolLoop.run(reconPrompt, { model, projectRoot, maxIterations: 4 }).pipe(Effect.exit)
+        const exit = yield* ToolLoop.run(reconPrompt, {
+            model,
+            projectRoot,
+            maxIterations: 4,
+            mcpManager,
+            permissionRules,
+            webSearchConfig,
+        }).pipe(Effect.exit)
         const outcome = Exit.isSuccess(exit) ? exit.value : { finalText: "", transcript: "", iterations: 0 }
         return outcome.transcript
     })
