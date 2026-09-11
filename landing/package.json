@@ -1,27 +1,33 @@
 {
   "name": "landing",
-  "version": "0.1.0",
-  "private": true,
+  "type": "module",
+  "version": "0.0.1",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "astro dev",
+    "check": "astro check",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "format": "prettier --write ."
   },
   "dependencies": {
-    "next": "16.3.4",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "@astrojs/check": "^0.9.10",
+    "@astrojs/sitemap": "^3.7.3",
+    "astro": "^7.2.9",
+    "typescript": "^6.0.3"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.3.4",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "prettier": "^3.9.6",
+    "prettier-plugin-astro": "^0.14.1",
+    "wrangler": "^4.123.0"
   },
-  "packageManager": "pnpm@12.3.4"
+  "lumos": {
+    "version": "0.0.3",
+    "commit": "1a8e1777ff072a3faeaebddcadb6ff80c6951c38",
+    "scaffolded": "2026-09-11"
+  }
 }
